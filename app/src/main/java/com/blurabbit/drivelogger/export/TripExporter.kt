@@ -4,6 +4,7 @@ import android.content.Context
 import com.blurabbit.drivelogger.recording.TripStorage
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.inject.Inject
@@ -34,12 +35,28 @@ class TripExporter @Inject constructor(
     }
 }
 
-/** Writes [files] into [dest] as a flat ZIP (one entry per file, keyed by file name). */
+/**
+ * Writes [files] into [dest] as a flat ZIP (one entry per file, keyed by file name) using the
+ * **STORED** method (no DEFLATE). The trip artifacts are already compressed (MP4 = H.264, MCAP =
+ * LZ4) so deflate buys ~nothing while costing large CPU — and, critically, a deflate stream
+ * desyncs on a single corrupted byte, destroying everything downstream. STORED keeps each file's
+ * bytes raw: a transfer error damages only its local region (the rest, incl. the MP4 moov, stays
+ * recoverable) and the per-entry CRC-32 makes corruption detectable. STORED requires size + CRC up
+ * front, so each file is read once to checksum, then once to copy.
+ */
 internal fun writeZip(files: List<File>, dest: File) {
     ZipOutputStream(dest.outputStream().buffered()).use { zip ->
-        val buf = ByteArray(64 * 1024)
+        zip.setMethod(ZipOutputStream.STORED)
+        val buf = ByteArray(1 shl 16)
         for (f in files) {
-            zip.putNextEntry(ZipEntry(f.name))
+            val len = f.length()
+            val entry = ZipEntry(f.name).apply {
+                method = ZipEntry.STORED
+                size = len
+                compressedSize = len
+                crc = crc32(f)
+            }
+            zip.putNextEntry(entry)
             f.inputStream().use { input ->
                 while (true) {
                     val n = input.read(buf); if (n <= 0) break; zip.write(buf, 0, n)
@@ -48,4 +65,13 @@ internal fun writeZip(files: List<File>, dest: File) {
             zip.closeEntry()
         }
     }
+}
+
+private fun crc32(f: File): Long {
+    val crc = CRC32()
+    val buf = ByteArray(1 shl 16)
+    f.inputStream().use { input ->
+        while (true) { val n = input.read(buf); if (n <= 0) break; crc.update(buf, 0, n) }
+    }
+    return crc.value
 }
