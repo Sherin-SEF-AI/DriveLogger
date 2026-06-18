@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.AudioTimestamp
 import android.media.MediaRecorder
 import android.os.SystemClock
 import com.blurabbit.drivelogger.domain.model.DrivingEventType
@@ -91,7 +92,7 @@ class AudioController @Inject constructor(
                     chunk[filled++] = read[i] / 32768f
                     i++
                     if (filled == chunkTarget) {
-                        emitChunk(chunk, sampleIndex, sr, classifier)
+                        emitChunk(record, chunk, sampleIndex, sr, classifier)
                         sampleIndex += chunkTarget
                         filled = 0
                     }
@@ -107,8 +108,17 @@ class AudioController @Inject constructor(
         }
     }
 
-    private fun emitChunk(chunk: FloatArray, sampleIndex: Long, sr: Int, classifier: YamnetClassifier) {
-        val unified = SystemClock.elapsedRealtimeNanos()
+    private val audioTs = AudioTimestamp()
+
+    private fun emitChunk(record: AudioRecord, chunk: FloatArray, fallbackSample: Long, sr: Int, classifier: YamnetClassifier) {
+        // Anchor on the audio HAL clock (frame position ↔ boottime ns) — jitter-free, unlike the
+        // flush/emit time. BOOTTIME shares the unified elapsedRealtime base. Fall back if unavailable.
+        val (sampleIndex, unified) =
+            if (record.getTimestamp(audioTs, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS && audioTs.framePosition > 0)
+                audioTs.framePosition to audioTs.nanoTime
+            else
+                fallbackSample to SystemClock.elapsedRealtimeNanos()
+
         var sumSq = 0.0; var peak = 0f
         for (v in chunk) { sumSq += v * v; val a = if (v < 0) -v else v; if (a > peak) peak = a }
         val rms = sqrt(sumSq / chunk.size)

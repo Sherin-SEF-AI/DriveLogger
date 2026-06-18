@@ -22,6 +22,7 @@ class TripExporter @Inject constructor(
             add(storage.mcapFile(tripId))
             add(storage.metadataFile(tripId))
             add(storage.audioFile(tripId))
+            add(storage.audioMetaFile(tripId))
             add(storage.hdMapFile(tripId))
             if (includeVideo) add(storage.mp4File(tripId))
         }.filter { it.exists() }

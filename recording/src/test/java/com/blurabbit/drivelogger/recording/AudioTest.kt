@@ -24,6 +24,32 @@ class AudioTest {
     }
 
     @Test
+    fun `least-squares recovers slope and intercept from anchors`() {
+        // True line: unified_ns = 62_500 * sample + 1_000_000  (=> 16000.0 Hz). Add small jitter.
+        val anchors = listOf(
+            longArrayOf(0, 1_000_000),
+            longArrayOf(16_000, 1_000_000 + 16_000L * 62_500 + 30_000),  // +30µs jitter
+            longArrayOf(32_000, 1_000_000 + 32_000L * 62_500 - 20_000),  // -20µs jitter
+            longArrayOf(48_000, 1_000_000 + 48_000L * 62_500 + 10_000),
+        )
+        val (slope, intercept) = leastSquaresFit(anchors)!!
+        assertThat(slope).isWithin(5.0).of(62_500.0)              // ~62500 ns/sample
+        assertThat(1e9 / slope).isWithin(2.0).of(16_000.0)        // measured rate ≈ 16 kHz
+        assertThat(intercept).isWithin(40_000.0).of(1_000_000.0)
+        assertThat(leastSquaresFit(listOf(longArrayOf(0, 0)))).isNull()  // need ≥2 points
+    }
+
+    @Test
+    fun `sidecar json carries measured rate, offset and anchors`() {
+        val anchors = listOf(longArrayOf(0, 1_000_000), longArrayOf(16_000, 1_000_000 + 16_000L * 62_500))
+        val json = buildAudioSidecarJson(anchors, nominalRateHz = 16_000, channels = 1, toEpochNs = { it + 1_700_000_000_000_000_000L })!!
+        assertThat(json).contains("\"measured_sample_rate\":16000.0")
+        assertThat(json).contains("\"device_to_wall_offset_ns\":1700000000000000000")
+        assertThat(json).contains("\"anchor_timebase\":\"boottime_ns\"")
+        assertThat(json).contains("[16000,1001000000]")  // raw [sample, unified_ns]
+    }
+
+    @Test
     fun `wav header has RIFF WAVE data tags and correct rate`() {
         val h = wavHeader(sampleRate = 16_000, channels = 1, dataLen = 0)
         assertThat(h.size).isEqualTo(44)

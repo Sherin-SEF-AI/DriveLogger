@@ -23,6 +23,7 @@ class TripStorage @Inject constructor(
     fun mp4File(tripId: String): File = File(tripDir(tripId), "trip.mp4")
     fun metadataFile(tripId: String): File = File(tripDir(tripId), "metadata.json")
     fun audioFile(tripId: String): File = File(tripDir(tripId), "audio.wav")
+    fun audioMetaFile(tripId: String): File = File(tripDir(tripId), "audio.wav.json")
     fun trackFile(tripId: String): File = File(tripDir(tripId), "track.json")
     fun hdMapFile(tripId: String): File = File(tripDir(tripId), "hdmap.json")
 

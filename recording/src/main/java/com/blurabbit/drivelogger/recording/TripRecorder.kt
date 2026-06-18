@@ -99,6 +99,7 @@ class TripRecorder @Inject constructor(
     private var lastLon: Double? = null
     private var lastTelemetryWriteNs = 0L
     private val trackPoints = ArrayList<DoubleArray>() // [lat, lon] polyline (written by the sensor consumer)
+    private val audioAnchors = ArrayList<LongArray>()  // [sampleIndex, unifiedNs] HAL anchors (audio meta collector)
 
     private var tripId: String? = null
     private var startElapsedNs = 0L
@@ -225,7 +226,13 @@ class TripRecorder @Inject constructor(
     private fun maybeStartAudio(s: CoroutineScope, w: McapAsyncWriter) {
         if (!hasAudioPermission()) return
         // Subscribe before start() so the first chunk's meta/detection aren't dropped by the hot flow.
-        s.launch { audio.meta.collect { m -> w.write(Topics.AUDIO_MICROPHONE, clock.toEpochNanos(m.unifiedNs), m); audioSamples++ } }
+        s.launch {
+            audio.meta.collect { m ->
+                w.write(Topics.AUDIO_MICROPHONE, clock.toEpochNanos(m.unifiedNs), m)
+                audioSamples++
+                audioAnchors.add(longArrayOf(m.sampleIndex, m.unifiedNs))
+            }
+        }
         s.launch { audio.events.collect { ev -> writeAudioEvent(w, ev) } }
         audio.start(storage.audioFile(tripId!!))
     }
@@ -309,6 +316,7 @@ class TripRecorder @Inject constructor(
             )
         }
         writeTrackJson(id) // downsampled GPS polyline → track.json (input for HD-map enrichment)
+        writeAudioSidecar(id) // self-describing audio.wav.json: measured rate + HAL anchors
 
         scope?.coroutineContext?.get(Job)?.cancel()
         scope = null
@@ -376,6 +384,14 @@ class TripRecorder @Inject constructor(
         lastLat = lat; lastLon = lon
     }
 
+    private fun writeAudioSidecar(id: String) {
+        if (!storage.audioFile(id).exists()) return
+        val json = buildAudioSidecarJson(audioAnchors.toList(), nominalRateHz = 16_000, channels = 1) {
+            clock.toEpochNanos(it)
+        } ?: return
+        runCatching { storage.audioMetaFile(id).writeText(json) }
+    }
+
     private fun writeTrackJson(id: String) {
         if (trackPoints.isEmpty()) return
         val json = buildString {
@@ -409,7 +425,7 @@ class TripRecorder @Inject constructor(
     private fun resetCounters() {
         imuSamples = 0; gpsSamples = 0; frameCount.set(0); eventCount.set(0); audioSamples = 0; droppedWrites.set(0)
         distanceMeters = 0.0; maxSpeedMps = 0.0; currentSpeedMps = 0.0
-        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0; trackPoints.clear()
+        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0; trackPoints.clear(); audioAnchors.clear()
     }
 }
 

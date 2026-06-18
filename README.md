@@ -83,7 +83,16 @@ Stock-Android upgrades that push the dataset toward AV grade on a phone alone:
   **timestamp source**.
 - **Audio** — a 16 kHz `audio.wav` sidecar + `/audio/microphone` level metadata, with an **on-device
   YAMNet (TFLite)** classifier emitting **siren/horn** `/events`. The model is an asset (see below);
-  without it, audio still records and detection is simply disabled.
+  without it, audio still records and detection is simply disabled. Each chunk's `(sample_index,
+  unified_ns)` anchor comes from the **audio HAL clock** (`AudioRecord.getTimestamp`, boottime) — not
+  flush time — so alignment is jitter-free. A self-describing **`audio.wav.json`** sidecar carries the
+  **measured** sample rate (fit from the anchors), the device→wall offset, and the raw anchors:
+
+  ```python
+  # audio.wav.json → sample-accurate wall time for any PCM sample
+  slope, intercept = least_squares(meta["anchors"])          # ns/sample, ns at sample 0
+  def wall_ns(sample_i): return slope*sample_i + intercept + meta["device_to_wall_offset_ns"]
+  ```
 - **Export / share** — bundle a trip into `trip_<id>.zip` (MP4 optional) and share via the system
   chooser (FileProvider).
 - **HD-map context** — an offline `WorkManager` job queries **OSM Overpass** along the trip's GPS
