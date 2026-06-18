@@ -133,7 +133,11 @@ class McapWriterTest {
                 val payloadLen = readU64(b, p).toInt(); p += 8
                 val payload = b.copyOfRange(p, p + payloadLen)
                 val records = if (comp == "lz4") {
-                    LZ4FrameInputStream(ByteArrayInputStream(payload)).use { it.readBytes() }
+                    // copyTo (not readBytes): readBytes() calls available(), which NPEs on
+                    // LZ4FrameInputStream before its buffer is initialized by the first read().
+                    LZ4FrameInputStream(ByteArrayInputStream(payload)).use { lz4 ->
+                        java.io.ByteArrayOutputStream().also { lz4.copyTo(it) }.toByteArray()
+                    }
                 } else {
                     payload
                 }

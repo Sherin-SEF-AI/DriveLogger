@@ -20,6 +20,7 @@ object Topics {
     const val ENVIRONMENT = "/environment"
     const val DEVICE_TELEMETRY = "/device/telemetry"
     const val AUDIO_MICROPHONE = "/audio/microphone"
+    const val AUDIO_PCM = "/audio/pcm"
     const val EVENTS = "/events"
 
     // Reserved for the future AI annotation pipeline (designed-in, not yet produced).

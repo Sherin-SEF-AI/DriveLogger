@@ -128,6 +128,17 @@ message AudioChunkMeta {
   int32 channels = 6;
 }
 
+// Timestamped raw-PCM audio frame carried INSIDE the MCAP (topic /audio/pcm), like camera frames —
+// makes the MCAP a single source of truth. unified_ns is HAL-clock anchored; sample_index is exact.
+// The audio.wav sidecar remains the guaranteed-lossless copy (MCAP frames are best-effort).
+message AudioFrame {
+  int64 unified_ns = 1;
+  int64 sample_index = 2;        // first PCM sample in this frame
+  int32 sample_rate_hz = 3;
+  int32 channels = 4;
+  bytes pcm_s16le = 5;           // little-endian signed 16-bit PCM
+}
+
 // Fix-level GPS data mirrored in a Blurabbit message for fields not in foxglove.LocationFix
 // (speed, bearing, accuracies). foxglove.LocationFix is logged in parallel for Studio.
 message GpsExtras {

@@ -9,6 +9,8 @@ import android.media.MediaRecorder
 import android.os.SystemClock
 import com.blurabbit.drivelogger.domain.model.DrivingEventType
 import com.blurabbit.drivelogger.proto.AudioChunkMeta
+import com.blurabbit.drivelogger.proto.AudioFrame
+import com.google.protobuf.ByteString
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -36,6 +38,9 @@ class AudioController @Inject constructor(
     val meta: SharedFlow<AudioChunkMeta> = _meta
     private val _events = MutableSharedFlow<AudioEvent>(extraBufferCapacity = 16)
     val events: SharedFlow<AudioEvent> = _events
+    // Timestamped PCM frames for the MCAP (/audio/pcm). Best-effort (audio.wav is the lossless copy).
+    private val _frames = MutableSharedFlow<AudioFrame>(extraBufferCapacity = 256)
+    val frames: SharedFlow<AudioFrame> = _frames
 
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -66,6 +71,9 @@ class AudioController @Inject constructor(
         raf.write(wavHeader(sr, 1, 0)) // placeholder; sizes rewritten on stop
         var dataBytes = 0L
         var sampleIndex = 0L
+        var totalRead = 0L
+        var anchorFrame = 0L; var anchorNs = 0L; var haveAnchor = false
+        val nsPerSample = 1_000_000_000L / sr
         val chunkTarget = sr // ~1 s
         val chunk = FloatArray(chunkTarget)
         var filled = 0
@@ -85,6 +93,22 @@ class AudioController @Inject constructor(
                 }
                 raf.write(pcm, 0, n * 2)
                 dataBytes += n * 2
+
+                // Emit a HAL-anchored PCM frame into the MCAP (/audio/pcm). Refresh the HAL anchor,
+                // then back-project this block's start sample onto it (jitter-free, sample-exact).
+                val blockStart = totalRead
+                totalRead += n
+                if (record.getTimestamp(audioTs, AudioTimestamp.TIMEBASE_BOOTTIME) == AudioRecord.SUCCESS && audioTs.framePosition > 0) {
+                    anchorFrame = audioTs.framePosition; anchorNs = audioTs.nanoTime; haveAnchor = true
+                }
+                val frameNs = if (haveAnchor) anchorNs + (blockStart - anchorFrame) * nsPerSample else SystemClock.elapsedRealtimeNanos()
+                _frames.tryEmit(
+                    AudioFrame.newBuilder()
+                        .setUnifiedNs(frameNs).setSampleIndex(blockStart)
+                        .setSampleRateHz(sr).setChannels(1)
+                        .setPcmS16Le(ByteString.copyFrom(pcm, 0, n * 2))
+                        .build(),
+                )
 
                 // Accumulate a ~1 s analysis window.
                 var i = 0

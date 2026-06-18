@@ -233,6 +233,8 @@ class TripRecorder @Inject constructor(
                 audioAnchors.add(longArrayOf(m.sampleIndex, m.unifiedNs))
             }
         }
+        // Raw PCM frames into the MCAP (best-effort; offer so a writer backlog never stalls audio).
+        s.launch { audio.frames.collect { fr -> if (!w.offer(Topics.AUDIO_PCM, clock.toEpochNanos(fr.unifiedNs), fr)) droppedWrites.incrementAndGet() } }
         s.launch { audio.events.collect { ev -> writeAudioEvent(w, ev) } }
         audio.start(storage.audioFile(tripId!!))
     }
@@ -366,6 +368,7 @@ class TripRecorder @Inject constructor(
         // Always include camera + audio + events channels even before their first message.
         map[Topics.CAMERA_FRONT] = TopicSchema(Topics.CAMERA_FRONT, CameraFrameMeta.getDescriptor())
         map[Topics.AUDIO_MICROPHONE] = TopicSchema(Topics.AUDIO_MICROPHONE, AudioChunkMeta.getDescriptor())
+        map[Topics.AUDIO_PCM] = TopicSchema(Topics.AUDIO_PCM, com.blurabbit.drivelogger.proto.AudioFrame.getDescriptor())
         map[Topics.EVENTS] = TopicSchema(Topics.EVENTS, com.blurabbit.drivelogger.proto.DrivingEvent.getDescriptor())
         return map.values.toList()
     }
