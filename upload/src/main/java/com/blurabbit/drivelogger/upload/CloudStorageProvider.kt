@@ -24,8 +24,11 @@ sealed interface UploadResult {
     data class Fatal(val reason: String) : UploadResult
 }
 
-/** A completed multipart part (number + ETag) used to resume / complete an upload. */
-data class PartRef(val partNumber: Int, val etag: String, val size: Long)
+/**
+ * A completed multipart part used to resume / complete an upload. [checksumSha256] is the
+ * base64 SHA-256 of the part bytes (echoed back into CompleteMultipartUpload when present).
+ */
+data class PartRef(val partNumber: Int, val etag: String, val size: Long, val checksumSha256: String? = null)
 
 /**
  * Backend-agnostic upload contract. Implementations perform resumable, checksum-validated,

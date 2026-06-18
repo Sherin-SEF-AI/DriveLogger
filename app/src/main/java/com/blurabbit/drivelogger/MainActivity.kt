@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         val needed = buildList {
             add(android.Manifest.permission.ACCESS_FINE_LOCATION)
             add(android.Manifest.permission.CAMERA)
+            add(android.Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) add(android.Manifest.permission.POST_NOTIFICATIONS)
         }.filter {
             checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED

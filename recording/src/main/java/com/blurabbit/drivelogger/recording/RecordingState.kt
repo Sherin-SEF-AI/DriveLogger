@@ -18,6 +18,7 @@ data class RecordingState(
     val gpsSamples: Long = 0,
     val imuSamples: Long = 0,
     val frameCount: Long = 0,
+    val audioSamples: Long = 0,
     val eventCount: Long = 0,
     val storageFreeBytes: Long = 0,
     val batteryPct: Double = 0.0,

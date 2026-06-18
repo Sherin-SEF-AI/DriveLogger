@@ -2,6 +2,8 @@ package com.blurabbit.drivelogger.data.db
 
 import androidx.room.Database
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -12,7 +14,7 @@ import androidx.room.RoomDatabase
         DeviceHealthEntity::class,
         SensorHealthEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -23,5 +25,12 @@ abstract class AppDatabase : RoomDatabase() {
 
     companion object {
         const val NAME = "drivelogger.db"
+
+        /** v2: persist completed multipart parts so a killed upload resumes without re-PUTting them. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE uploads ADD COLUMN completedPartsJson TEXT")
+            }
+        }
     }
 }

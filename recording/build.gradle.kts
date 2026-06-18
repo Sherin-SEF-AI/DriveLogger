@@ -30,6 +30,7 @@ dependencies {
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.bundles.camerax)
+    implementation(libs.tensorflow.lite.task.audio)
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 

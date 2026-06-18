@@ -45,12 +45,14 @@ internal fun UploadEntity.toDomain() = UploadTask(
     id = id, tripId = tripId, artifact = ArtifactKind.valueOf(artifact), provider = CloudProvider.valueOf(provider),
     localPath = localPath, remoteKey = remoteKey, status = UploadStatus.valueOf(status), uploadId = uploadId,
     bytesSent = bytesSent, totalBytes = totalBytes, checksumSha256 = checksumSha256, retryCount = retryCount,
+    completedPartsJson = completedPartsJson,
 )
 
 internal fun UploadTask.toEntity() = UploadEntity(
     id = id, tripId = tripId, artifact = artifact.name, provider = provider.name, localPath = localPath,
     remoteKey = remoteKey, status = status.name, uploadId = uploadId, bytesSent = bytesSent,
     totalBytes = totalBytes, checksumSha256 = checksumSha256, retryCount = retryCount,
+    completedPartsJson = completedPartsJson,
 )
 
 internal fun RecordingSessionEntity.toDomain() = RecordingSession(

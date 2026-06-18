@@ -66,6 +66,7 @@ dependencies {
     ksp(libs.hilt.work.compiler)
     implementation(libs.work.runtime.ktx)
     implementation(libs.camera.view)
+    implementation(libs.okhttp) // HD-map enrichment (OSM Overpass) worker
 
     testImplementation(libs.junit)
     testImplementation(libs.truth)

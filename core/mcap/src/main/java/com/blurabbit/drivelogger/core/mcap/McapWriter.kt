@@ -16,7 +16,7 @@ import java.util.zip.CRC32
  * ```
  * <magic><Header>
  *   <Schema*><Channel*>                       (written to the data section on first use)
- *   ( <Chunk><MessageIndex*> )*               (messages batched, ZSTD-compressed, indexed)
+ *   ( <Chunk><MessageIndex*> )*               (messages batched, LZ4-compressed, indexed)
  * <DataEnd>
  *   <Schema*><Channel*><ChunkIndex*><Statistics>   (summary section)
  *   <SummaryOffset*>                                (summary offset section)
@@ -149,7 +149,6 @@ class McapWriter(
         writeMessage(channelId, logTimeNs, message.toByteArray())
 
     /** Append a message; flushes a chunk automatically when the buffer reaches the target size. */
-    @Synchronized
     fun writeMessage(channelId: Int, logTimeNs: Long, data: ByteArray, publishTimeNs: Long = logTimeNs) {
         check(!closed) { "writer is closed" }
         val seq = (sequenceByChannel[channelId] ?: 0L).also { sequenceByChannel[channelId] = it + 1 }
@@ -171,7 +170,6 @@ class McapWriter(
     }
 
     /** Force the in-memory chunk to disk (used for periodic durability / pause boundaries). */
-    @Synchronized
     fun flush() { flushChunk(); sink.flush() }
 
     private fun flushChunk() {
@@ -224,7 +222,6 @@ class McapWriter(
     // ---- attachments / metadata ----------------------------------------------------------
 
     /** Embed a file (e.g. camera calibration, metadata.json) as an MCAP attachment. */
-    @Synchronized
     fun addAttachment(name: String, mediaType: String, data: ByteArray, logTimeNs: Long, createTimeNs: Long = logTimeNs) {
         flushChunk() // attachments live outside chunks
         val pre = Buf().u64(logTimeNs).u64(createTimeNs).str(name).str(mediaType).bytesU64(data).toByteArray()
@@ -236,7 +233,6 @@ class McapWriter(
         attachmentCount++
     }
 
-    @Synchronized
     fun addMetadata(name: String, entries: Map<String, String>) {
         flushChunk()
         val rec = record(Op.METADATA, Buf().str(name).stringMap(entries).toByteArray())
@@ -248,7 +244,6 @@ class McapWriter(
 
     // ---- finalize ------------------------------------------------------------------------
 
-    @Synchronized
     override fun close() {
         if (closed) return
         closed = true

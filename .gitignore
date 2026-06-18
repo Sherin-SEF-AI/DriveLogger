@@ -15,3 +15,6 @@
 
 # Sample dataset video is large; the MCAP/metadata/calibration are kept as the sample.
 sample_trip/*.mp4
+
+# Kotlin compiler caches
+.kotlin/

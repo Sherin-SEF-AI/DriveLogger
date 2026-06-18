@@ -20,4 +20,5 @@ data class UploadTask(
     val totalBytes: Long = 0,
     val checksumSha256: String? = null,
     val retryCount: Int = 0,
+    val completedPartsJson: String? = null, // serialized List<PartRef> for resuming multipart uploads
 )

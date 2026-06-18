@@ -20,6 +20,7 @@ import com.blurabbit.drivelogger.events.AccelSample
 import com.blurabbit.drivelogger.events.EventDetector
 import com.blurabbit.drivelogger.events.GyroSample
 import com.blurabbit.drivelogger.events.SpeedSample
+import com.blurabbit.drivelogger.proto.AudioChunkMeta
 import com.blurabbit.drivelogger.proto.CameraFrameMeta
 import com.blurabbit.drivelogger.proto.DeviceTelemetry
 import com.blurabbit.drivelogger.proto.GpsExtras
@@ -66,6 +67,7 @@ class TripRecorder @Inject constructor(
     private val detector: EventDetector,
     private val storage: TripStorage,
     private val camera: CameraController,
+    private val audio: AudioController,
     private val tripRepo: TripRepository,
     private val eventRepo: EventRepository,
     private val healthRepo: HealthRepository,
@@ -81,18 +83,22 @@ class TripRecorder @Inject constructor(
     private var sessionId: Long = -1
     private var lifecycleOwner: LifecycleOwner? = null
 
-    // Counters (some written from the camera thread → atomic).
-    private var imuSamples = 0L
-    private var gpsSamples = 0L
+    // Counters. frameCount/droppedWrites are touched by the camera thread → atomic. The rest each
+    // have a single writer coroutine but are read by the stateTicker on another Default thread, so
+    // they are @Volatile for cross-thread visibility (single writer ⇒ no read-modify-write race).
+    @Volatile private var imuSamples = 0L
+    @Volatile private var gpsSamples = 0L
     private val frameCount = AtomicLong(0)
-    private var eventCount = 0L
+    private val eventCount = AtomicLong(0) // written by both the detector and the audio-events collector
+    @Volatile private var audioSamples = 0L
     private val droppedWrites = AtomicLong(0)
-    private var distanceMeters = 0.0
-    private var maxSpeedMps = 0.0
-    private var currentSpeedMps = 0.0
+    @Volatile private var distanceMeters = 0.0
+    @Volatile private var maxSpeedMps = 0.0
+    @Volatile private var currentSpeedMps = 0.0
     private var lastLat: Double? = null
     private var lastLon: Double? = null
     private var lastTelemetryWriteNs = 0L
+    private val trackPoints = ArrayList<DoubleArray>() // [lat, lon] polyline (written by the sensor consumer)
 
     private var tripId: String? = null
     private var startElapsedNs = 0L
@@ -132,6 +138,7 @@ class TripRecorder @Inject constructor(
         scope = s
         launchPipeline(s, available, w)
         maybeStartCamera(s, w)
+        maybeStartAudio(s, w)
         _state.value = RecordingState(phase = RecordingPhase.RECORDING, tripId = tripId, startElapsedNs = startElapsedNs)
     }
 
@@ -144,7 +151,7 @@ class TripRecorder @Inject constructor(
         s.launch {
             detector.events.collect { ev ->
                 w.write(Topics.EVENTS, clock.toEpochNanos(ev.unifiedNs), ev)
-                eventCount++
+                eventCount.incrementAndGet()
                 eventRepo.insert(
                     DrivingEvent(
                         tripId = tripId!!, type = ev.type.toDomain(), confidence = ev.confidence,
@@ -215,9 +222,37 @@ class TripRecorder @Inject constructor(
         if (ok) tripRepo.closeSession(sessionId, clock.nowNanos(), mp4.absolutePath)
     }
 
+    private fun maybeStartAudio(s: CoroutineScope, w: McapAsyncWriter) {
+        if (!hasAudioPermission()) return
+        // Subscribe before start() so the first chunk's meta/detection aren't dropped by the hot flow.
+        s.launch { audio.meta.collect { m -> w.write(Topics.AUDIO_MICROPHONE, clock.toEpochNanos(m.unifiedNs), m); audioSamples++ } }
+        s.launch { audio.events.collect { ev -> writeAudioEvent(w, ev) } }
+        audio.start(storage.audioFile(tripId!!))
+    }
+
+    private suspend fun writeAudioEvent(w: McapAsyncWriter, ev: AudioEvent) {
+        val proto = com.blurabbit.drivelogger.proto.DrivingEvent.newBuilder()
+            .setUnifiedNs(ev.unifiedNs)
+            .setType(ev.type.toProtoEventType())
+            .setConfidence(ev.confidence)
+            .setEvidenceJson("{\"label\":\"${ev.label}\"}")
+            .setLatitude(lastLat ?: 0.0).setLongitude(lastLon ?: 0.0).setSpeedMps(currentSpeedMps)
+            .build()
+        w.write(Topics.EVENTS, clock.toEpochNanos(ev.unifiedNs), proto)
+        eventCount.incrementAndGet()
+        eventRepo.insert(
+            DrivingEvent(
+                tripId = tripId!!, type = ev.type, confidence = ev.confidence, unifiedTsNs = ev.unifiedNs,
+                latitude = lastLat, longitude = lastLon, speedMps = currentSpeedMps,
+                evidenceJson = "{\"label\":\"${ev.label}\"}",
+            ),
+        )
+    }
+
     override suspend fun pause() = lifecycle.withLock {
         if (_state.value.phase != RecordingPhase.RECORDING) return@withLock
         camera.stop()
+        audio.stop()
         // Cancel the pipeline children but keep the scope + writer open across pause.
         scope?.let { sc -> sc.coroutineContext[Job]?.children?.forEach { it.cancelAndJoin() } }
         writer?.flush()
@@ -232,6 +267,7 @@ class TripRecorder @Inject constructor(
         val available = sensorSources.filter { it.isAvailable() }
         launchPipeline(s, available, w)
         maybeStartCamera(s, w)
+        maybeStartAudio(s, w)
         _state.value = _state.value.copy(phase = RecordingPhase.RECORDING)
     }
 
@@ -239,6 +275,7 @@ class TripRecorder @Inject constructor(
         val id = tripId ?: return@withLock
         _state.value = _state.value.copy(phase = RecordingPhase.STOPPING)
         camera.stop()
+        audio.stop()
         scope?.let { sc -> sc.coroutineContext[Job]?.children?.forEach { runCatching { it.cancelAndJoin() } } }
         sensorSources.forEach { it.stop() }
 
@@ -246,7 +283,7 @@ class TripRecorder @Inject constructor(
         val avgSpeed = if (durationNs > 0) distanceMeters / (durationNs / 1e9) else 0.0
         val stats = TripStats(
             distanceMeters = distanceMeters, maxSpeedMps = maxSpeedMps, avgSpeedMps = avgSpeed,
-            gpsSamples = gpsSamples, imuSamples = imuSamples, frameCount = frameCount.get(), eventCount = eventCount,
+            gpsSamples = gpsSamples, imuSamples = imuSamples, frameCount = frameCount.get(), eventCount = eventCount.get(),
         )
         val endWallMs = clock.wallEpochNanosNow() / 1_000_000
         tripRepo.updateStats(id, stats)
@@ -271,6 +308,7 @@ class TripRecorder @Inject constructor(
                 storage.metadataFile(id),
             )
         }
+        writeTrackJson(id) // downsampled GPS polyline → track.json (input for HD-map enrichment)
 
         scope?.coroutineContext?.get(Job)?.cancel()
         scope = null
@@ -288,7 +326,7 @@ class TripRecorder @Inject constructor(
                 satellitesTotal = satTotal, satellitesUsed = satUsed,
                 distanceMeters = distanceMeters, maxSpeedMps = maxSpeedMps,
                 gpsSamples = gpsSamples, imuSamples = imuSamples,
-                frameCount = frameCount.get(), eventCount = eventCount,
+                frameCount = frameCount.get(), eventCount = eventCount.get(), audioSamples = audioSamples,
                 storageFreeBytes = storage.freeBytes(),
                 droppedWrites = droppedWrites.get(),
                 sensorHealth = available.map { it.health() },
@@ -317,8 +355,9 @@ class TripRecorder @Inject constructor(
         available.forEach { src ->
             src.topics.forEach { td -> map[td.topic] = TopicSchema(td.topic, td.descriptor, td.metadata) }
         }
-        // Always include camera + events channels even before their first message.
+        // Always include camera + audio + events channels even before their first message.
         map[Topics.CAMERA_FRONT] = TopicSchema(Topics.CAMERA_FRONT, CameraFrameMeta.getDescriptor())
+        map[Topics.AUDIO_MICROPHONE] = TopicSchema(Topics.AUDIO_MICROPHONE, AudioChunkMeta.getDescriptor())
         map[Topics.EVENTS] = TopicSchema(Topics.EVENTS, com.blurabbit.drivelogger.proto.DrivingEvent.getDescriptor())
         return map.values.toList()
     }
@@ -329,7 +368,25 @@ class TripRecorder @Inject constructor(
             val d = haversine(pLat, pLon, lat, lon)
             if (d in 0.1..500.0) distanceMeters += d // ignore jitter and GPS jumps
         }
+        // Downsample to ~1 point / 50 m for a compact polyline (HD-map enrichment input).
+        val last = trackPoints.lastOrNull()
+        if (last == null || haversine(last[0], last[1], lat, lon) >= 50.0) {
+            trackPoints += doubleArrayOf(lat, lon)
+        }
         lastLat = lat; lastLon = lon
+    }
+
+    private fun writeTrackJson(id: String) {
+        if (trackPoints.isEmpty()) return
+        val json = buildString {
+            append("[")
+            trackPoints.forEachIndexed { i, p ->
+                if (i > 0) append(",")
+                append("[").append(p[0]).append(",").append(p[1]).append("]")
+            }
+            append("]")
+        }
+        runCatching { storage.trackFile(id).writeText(json) }
     }
 
     private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -345,15 +402,32 @@ class TripRecorder @Inject constructor(
         appContext.checkSelfPermission(android.Manifest.permission.CAMERA) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
 
+    private fun hasAudioPermission(): Boolean =
+        appContext.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
     private fun resetCounters() {
-        imuSamples = 0; gpsSamples = 0; frameCount.set(0); eventCount = 0; droppedWrites.set(0)
+        imuSamples = 0; gpsSamples = 0; frameCount.set(0); eventCount.set(0); audioSamples = 0; droppedWrites.set(0)
         distanceMeters = 0.0; maxSpeedMps = 0.0; currentSpeedMps = 0.0
-        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0
+        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0; trackPoints.clear()
     }
 }
 
 /** SQLite stores NaN/Infinity as NULL, breaking NOT NULL columns — coerce to a safe sentinel. */
 private fun Double.nanGuard(sentinel: Double = -1.0): Double = if (isFinite()) this else sentinel
+
+/** Domain → proto event type (audio classifier emits SIREN / VEHICLE_HORN). */
+private fun DrivingEventType.toProtoEventType(): com.blurabbit.drivelogger.proto.DrivingEvent.EventType = when (this) {
+    DrivingEventType.HARD_BRAKING -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.HARD_BRAKING
+    DrivingEventType.SUDDEN_ACCELERATION -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.SUDDEN_ACCELERATION
+    DrivingEventType.SHARP_TURN -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.SHARP_TURN
+    DrivingEventType.POTHOLE_IMPACT -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.POTHOLE_IMPACT
+    DrivingEventType.SPEED_BUMP -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.SPEED_BUMP
+    DrivingEventType.RAPID_LANE_CHANGE -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.RAPID_LANE_CHANGE
+    DrivingEventType.AGGRESSIVE_DRIVING -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.AGGRESSIVE_DRIVING
+    DrivingEventType.SIREN -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.SIREN
+    DrivingEventType.VEHICLE_HORN -> com.blurabbit.drivelogger.proto.DrivingEvent.EventType.VEHICLE_HORN
+}
 
 private fun com.blurabbit.drivelogger.proto.DrivingEvent.EventType.toDomain(): DrivingEventType = when (this) {
     com.blurabbit.drivelogger.proto.DrivingEvent.EventType.HARD_BRAKING -> DrivingEventType.HARD_BRAKING

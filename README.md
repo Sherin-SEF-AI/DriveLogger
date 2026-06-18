@@ -62,14 +62,35 @@ monitors drift/monotonicity (`DriftMonitor`), and feeds warnings to the data-qua
 :core:mcap    McapWriter, McapAsyncWriter (actor), LZ4 chunks, McapRecoveryTool
 :domain       models, repository interfaces, use cases (pure Kotlin)
 :data         Room (trips/sessions/events/uploads/device_health/sensor_health) + repos
-:sensors      SensorSource seam + IMU/GNSS/Environment/Telemetry (+ OBD example)
+:sensors      SensorSource seam + IMU/GNSS (covariance, DOP, raw measurements)/Environment/Telemetry (+ OBD example)
 :events       EventDetector + pluggable EventRule set
-:recording    RecordingForegroundService, TripRecorder, CameraController, MetadataGenerator, recovery
+:recording    RecordingForegroundService, TripRecorder, CameraController, AudioController + YAMNet, MetadataGenerator
 :upload       CloudStorageProvider, S3/MinIO (SigV4 multipart, resumable), Azure stub, UploadWorker
+:app …        export (zip + share), HD-map enrichment (OSM Overpass) alongside the Compose UI
 ```
 
 Dependency direction: `app → recording/events/upload → sensors → data → domain`; everything may
 use `:core:*`; `:domain` has no Android dependencies.
+
+## Additional capture & tooling (no extra hardware)
+
+Stock-Android upgrades that push the dataset toward AV grade on a phone alone:
+
+- **GNSS for fusion/PPK** — `/gps/fix` carries an ENU position **covariance**; `/gps/raw` adds
+  **PDOP/HDOP/VDOP** (from NMEA GSA); `/gnss/measurements` logs **raw `GnssMeasurement` + `GnssClock`**
+  (pseudorange/carrier-phase) for offline PPK/RTKLIB (full-tracking requested on Android 12+).
+- **Camera↔motion fusion** — `CameraFrameMeta` adds per-frame **rolling-shutter skew** and the sensor
+  **timestamp source**.
+- **Audio** — a 16 kHz `audio.wav` sidecar + `/audio/microphone` level metadata, with an **on-device
+  YAMNet (TFLite)** classifier emitting **siren/horn** `/events`. The model is an asset (see below);
+  without it, audio still records and detection is simply disabled.
+- **Export / share** — bundle a trip into `trip_<id>.zip` (MP4 optional) and share via the system
+  chooser (FileProvider).
+- **HD-map context** — an offline `WorkManager` job queries **OSM Overpass** along the trip's GPS
+  track and writes `hdmap.json` (road class / lanes / speed limit / oneway); included in the export.
+
+> **YAMNet model:** drop `yamnet.tflite` (TF-Hub, *with metadata*) into `recording/src/main/assets/`.
+> It is intentionally uncommitted; see `assets/README_yamnet.txt`.
 
 ## Extensibility (designed-in)
 
@@ -89,10 +110,7 @@ use `:core:*`; `:domain` has no Android dependencies.
 Requirements: JDK 17, Android SDK 35, an internet connection for the first dependency sync.
 
 ```bash
-# If the Gradle wrapper jar is missing (not committed), generate it once:
-gradle wrapper --gradle-version 8.11.1
-
-./gradlew :core:clock:test :core:mcap:test :events:test   # JVM unit tests
+./gradlew :core:clock:test :core:mcap:test :events:test :upload:test   # JVM unit tests
 ./gradlew assembleDebug                                     # build the APK
 ./gradlew installDebug                                      # install on a connected device
 ```
@@ -115,8 +133,9 @@ render on timelines; play the MP4 against `/camera/front` frame metadata.
 ### Cloud upload
 
 Enter S3/MinIO endpoint, region, bucket, and keys in **Settings** (encrypted via Android
-Keystore). On a trip's detail screen tap **Upload**; `UploadWorker` performs resumable,
-checksum-validated multipart upload on an unmetered network.
+Keystore). On a trip's detail screen tap **Upload**; `UploadWorker` runs a multipart upload on an
+unmetered network that is **resumable** (completed parts are persisted and skipped on retry) and
+integrity-checked via **per-part `x-amz-checksum-sha256`** that S3/MinIO validates server-side.
 
 ---
 
@@ -135,8 +154,9 @@ off the hot path); tunable chunk size / LZ4; storage + thermal guards surfaced a
 
 ## Security
 
-Credentials in `EncryptedSharedPreferences` (Keystore master key); TLS-only uploads with SHA-256
-verification; app-private scoped storage; runtime permissions; R8 keep-rules for protobuf/Room/Hilt/lz4.
+Credentials in `EncryptedSharedPreferences` (Keystore master key); TLS-only uploads with per-part
+SHA-256 checksums validated server-side; app-private scoped storage; runtime permissions; R8
+keep-rules for protobuf/Room/Hilt/lz4.
 
 ## Status
 

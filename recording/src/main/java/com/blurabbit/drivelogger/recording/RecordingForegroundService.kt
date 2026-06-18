@@ -63,6 +63,7 @@ class RecordingForegroundService : LifecycleService() {
         if (Build.VERSION.SDK_INT >= 34) {
             val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION or
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             startForeground(NOTIF_ID, notification, type)
         } else {

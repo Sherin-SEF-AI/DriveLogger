@@ -3,6 +3,8 @@ package com.blurabbit.drivelogger.recording
 import android.annotation.SuppressLint
 import android.content.Context
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
@@ -44,6 +46,8 @@ class CameraController @Inject constructor(
     private var provider: ProcessCameraProvider? = null
     private val frameId = AtomicLong(0)
     @Volatile private var videoUri: String = "trip.mp4"
+    // CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE for the bound camera (read once at start).
+    @Volatile private var timestampSource: Int = 0
 
     @OptIn(ExperimentalCamera2Interop::class)
     @SuppressLint("MissingPermission", "RestrictedApi")
@@ -55,6 +59,7 @@ class CameraController @Inject constructor(
         val cameraProvider = awaitFuture(ProcessCameraProvider.getInstance(context)) ?: return false
         provider = cameraProvider
         videoUri = output.name
+        timestampSource = readTimestampSource()
 
         val recorder = Recorder.Builder()
             .setQualitySelector(QualitySelector.from(Quality.FHD)) // 1080p
@@ -74,6 +79,7 @@ class CameraController @Inject constructor(
                     val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
                     val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
                     val focal = result.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f
+                    val rollingSkew = result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW) ?: 0L
                     onFrameMeta(
                         CameraFrameMeta.newBuilder()
                             .setUnifiedNs(unified)
@@ -85,6 +91,8 @@ class CameraController @Inject constructor(
                             .setFocalLengthMm(focal.toDouble())
                             .setWidth(1920).setHeight(1080)
                             .setCodec("h264")
+                            .setRollingShutterSkewNs(rollingSkew)
+                            .setSensorTimestampSource(timestampSource)
                             .build(),
                     )
                 }
@@ -107,6 +115,15 @@ class CameraController @Inject constructor(
             }
         }
     }
+
+    /** SENSOR_INFO_TIMESTAMP_SOURCE of the back camera (0=UNKNOWN, 1=REALTIME); 0 if unavailable. */
+    private fun readTimestampSource(): Int = runCatching {
+        val cm = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        val id = cm.cameraIdList.firstOrNull {
+            cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        } ?: return 0
+        cm.getCameraCharacteristics(id).get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ?: 0
+    }.getOrDefault(0)
 
     fun frameCount(): Long = frameId.get()
 

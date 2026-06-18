@@ -66,4 +66,24 @@ object Checksums {
         }
         return md.digest().joinToString("") { "%02x".format(it) }
     }
+
+    /**
+     * Base64 SHA-256 of a `[offset, offset+size)` window of [file] — the value S3 expects in
+     * `x-amz-checksum-sha256` for a multipart part. Streamed in 64 KiB blocks (no full-part buffering).
+     */
+    fun sha256Base64(file: java.io.File, offset: Long, size: Long): String {
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        java.io.RandomAccessFile(file, "r").use { raf ->
+            raf.seek(offset)
+            var remaining = size
+            val buf = ByteArray(64 * 1024)
+            while (remaining > 0) {
+                val n = raf.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                if (n <= 0) break
+                md.update(buf, 0, n)
+                remaining -= n
+            }
+        }
+        return android.util.Base64.encodeToString(md.digest(), android.util.Base64.NO_WRAP)
+    }
 }

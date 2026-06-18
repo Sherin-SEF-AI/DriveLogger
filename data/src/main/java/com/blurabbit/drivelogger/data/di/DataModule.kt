@@ -41,6 +41,7 @@ object DatabaseModule {
                 }
             })
             // Production migrations are added per schema version; never destructive in the field.
+            .addMigrations(AppDatabase.MIGRATION_1_2)
             .build()
 
     @Provides fun provideTripDao(db: AppDatabase): TripDao = db.tripDao()

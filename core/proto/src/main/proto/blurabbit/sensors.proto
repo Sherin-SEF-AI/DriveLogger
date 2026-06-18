@@ -50,6 +50,12 @@ message CameraFrameMeta {
   int32 width = 8;
   int32 height = 9;
   string codec = 10;             // "h264" | "h265"
+  // Rolling-shutter readout time (CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW): the delay between the
+  // first and last row's exposure. Critical for fusing the camera with high-rate motion. 0 if absent.
+  int64 rolling_shutter_skew_ns = 11;
+  // CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE (0=UNKNOWN,1=REALTIME). Tells consumers which
+  // epoch SENSOR_TIMESTAMP used, so the unified-clock mapping can be interpreted/trusted.
+  int32 sensor_timestamp_source = 12;
 }
 
 // One satellite observation within a GnssRaw message.
@@ -73,6 +79,55 @@ message GnssRaw {
   map<int32, int32> constellation_counts = 5;
 }
 
+// Receiver clock snapshot from android.location.GnssClock — the time base PPK/RTKLIB needs to
+// reconstruct pseudoranges from received-SV-time.
+message GnssClockSample {
+  int64 time_nanos = 1;                        // GnssClock.getTimeNanos()
+  int64 full_bias_nanos = 2;                   // getFullBiasNanos() (GPS-time minus hw clock)
+  double bias_nanos = 3;                       // getBiasNanos()
+  double bias_uncertainty_nanos = 4;
+  double drift_nanos_per_second = 5;
+  double drift_uncertainty_nps = 6;
+  int32 hardware_clock_discontinuity_count = 7;
+  int32 leap_second = 8;
+  bool has_leap_second = 9;
+}
+
+// One raw android.location.GnssMeasurement (per satellite, per epoch).
+message GnssMeasurement {
+  int32 svid = 1;
+  int32 constellation = 2;                     // GnssStatus.CONSTELLATION_*
+  double time_offset_nanos = 3;
+  int32 state = 4;                             // sync-state bitfield (getState())
+  int64 received_sv_time_nanos = 5;
+  int64 received_sv_time_uncertainty_nanos = 6;
+  double cn0_dbhz = 7;
+  double pseudorange_rate_mps = 8;             // getPseudorangeRateMetersPerSecond()
+  double pseudorange_rate_uncertainty_mps = 9;
+  int32 accumulated_delta_range_state = 10;    // carrier-phase validity bitfield
+  double accumulated_delta_range_meters = 11;  // carrier phase
+  double accumulated_delta_range_uncertainty_m = 12;
+  double carrier_frequency_hz = 13;            // L1/L5 etc.
+  int32 multipath_indicator = 14;
+}
+
+// A full raw-measurement epoch (clock + all visible satellites) for offline PPK/RTK.
+message GnssMeasurements {
+  int64 unified_ns = 1;
+  GnssClockSample clock = 2;
+  repeated GnssMeasurement measurements = 3;
+}
+
+// Per-chunk microphone metadata. Raw PCM lives in the sidecar audio.wav; only level/index here.
+message AudioChunkMeta {
+  int64 unified_ns = 1;
+  int64 sample_index = 2;        // running PCM sample offset into audio.wav
+  double rms_dbfs = 3;           // chunk loudness, dBFS (<= 0)
+  double peak_dbfs = 4;
+  int32 sample_rate_hz = 5;
+  int32 channels = 6;
+}
+
 // Fix-level GPS data mirrored in a Blurabbit message for fields not in foxglove.LocationFix
 // (speed, bearing, accuracies). foxglove.LocationFix is logged in parallel for Studio.
 message GpsExtras {
@@ -83,6 +138,10 @@ message GpsExtras {
   double vertical_accuracy_m = 5;
   double speed_accuracy_mps = 6;
   double bearing_accuracy_deg = 7;
+  // Dilution of precision from the NMEA GSA sentence (0 = not yet observed).
+  double pdop = 8;
+  double hdop = 9;
+  double vdop = 10;
 }
 
 // Device health / telemetry snapshot.
@@ -119,5 +178,7 @@ message DrivingEvent {
     SPEED_BUMP = 5;
     RAPID_LANE_CHANGE = 6;
     AGGRESSIVE_DRIVING = 7;
+    SIREN = 8;            // emergency-vehicle siren (audio classifier)
+    VEHICLE_HORN = 9;     // car/truck horn (audio classifier)
   }
 }

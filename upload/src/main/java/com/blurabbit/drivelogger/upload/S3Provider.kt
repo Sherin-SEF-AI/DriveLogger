@@ -48,9 +48,10 @@ class S3Provider @Inject constructor(
                 val size = minOf(PART_SIZE, total - offset)
                 val existing = done[partNumber]
                 if (existing == null) {
-                    val etag = uploadPart(config, signer, remoteKey, uploadId, partNumber, file, offset, size)
+                    val checksum = Checksums.sha256Base64(file, offset, size)
+                    val etag = uploadPart(config, signer, remoteKey, uploadId, partNumber, file, offset, size, checksum)
                         ?: return UploadResult.Retryable("part $partNumber failed", uploadId, parts)
-                    parts += PartRef(partNumber, etag, size)
+                    parts += PartRef(partNumber, etag, size, checksum)
                     sent += size
                     progress.onProgress(sent, total)
                 }
@@ -81,6 +82,7 @@ class S3Provider @Inject constructor(
             Request.Builder().url(objectUrl(config, key, "uploads"))
                 .post(ByteArray(0).toRequestBody()).build(),
             System.currentTimeMillis(),
+            mapOf("x-amz-checksum-algorithm" to "SHA256"), // each part will carry x-amz-checksum-sha256
         )
         client.newCall(req).execute().use { resp ->
             val body = resp.body?.string() ?: return null
@@ -91,12 +93,13 @@ class S3Provider @Inject constructor(
 
     private fun uploadPart(
         config: CloudConfig, signer: AwsV4Signer, key: String, uploadId: String,
-        partNumber: Int, file: File, offset: Long, size: Long,
+        partNumber: Int, file: File, offset: Long, size: Long, checksumB64: String,
     ): String? {
         val req = signer.sign(
             Request.Builder().url(objectUrl(config, key, "partNumber=$partNumber&uploadId=$uploadId"))
                 .put(fileSegmentBody(file, offset, size)).build(),
             System.currentTimeMillis(),
+            mapOf("x-amz-checksum-sha256" to checksumB64), // S3/MinIO rejects the part on mismatch (BadDigest)
         )
         client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return null
@@ -109,7 +112,12 @@ class S3Provider @Inject constructor(
     ): String? {
         val xml = buildString {
             append("<CompleteMultipartUpload>")
-            parts.forEach { append("<Part><PartNumber>${it.partNumber}</PartNumber><ETag>${it.etag}</ETag></Part>") }
+            parts.forEach { p ->
+                append("<Part><PartNumber>${p.partNumber}</PartNumber>")
+                append("<ETag>\"${p.etag.trim('"')}\"</ETag>")
+                p.checksumSha256?.let { append("<ChecksumSHA256>$it</ChecksumSHA256>") }
+                append("</Part>")
+            }
             append("</CompleteMultipartUpload>")
         }
         val req = signer.sign(
@@ -118,8 +126,11 @@ class S3Provider @Inject constructor(
             System.currentTimeMillis(),
         )
         client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) return null
-            return resp.header("ETag") ?: "completed"
+            // S3 can return HTTP 200 and then stream an <Error> in the body for this call.
+            if (isS3Error(body)) return null
+            return ETAG_XML.find(body)?.groupValues?.get(1)?.trim('"') ?: resp.header("ETag") ?: "completed"
         }
     }
 
@@ -145,8 +156,15 @@ class S3Provider @Inject constructor(
     private companion object {
         const val PART_SIZE = 8L * 1024 * 1024 // 8 MiB (S3 minimum part size is 5 MiB)
         val UPLOAD_ID = Regex("<UploadId>(.*?)</UploadId>")
+        val ETAG_XML = Regex("<ETag>(.*?)</ETag>")
     }
 }
+
+/**
+ * True if an S3 XML response body carries an `<Error>` element. CompleteMultipartUpload is the
+ * notorious case: S3 may answer HTTP 200 and then stream `<Error>...</Error>` instead of a result.
+ */
+internal fun isS3Error(body: String): Boolean = body.contains("<Error>") || body.contains("<Error ")
 
 /** Azure Blob upload — intentionally a stub per the plan (S3/MinIO are the shipped backends). */
 class AzureBlobProvider @Inject constructor() : CloudStorageProvider {

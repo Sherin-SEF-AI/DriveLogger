@@ -10,6 +10,7 @@ object Topics {
     const val CAMERA_REAR = "/camera/rear"
     const val GPS_FIX = "/gps/fix"
     const val GNSS_RAW = "/gps/raw"
+    const val GNSS_MEASUREMENTS = "/gnss/measurements"
     const val IMU_ACCEL = "/imu/accelerometer"
     const val IMU_GYRO = "/imu/gyroscope"
     const val IMU_MAG = "/imu/magnetometer"
@@ -18,6 +19,7 @@ object Topics {
     const val IMU_LINEAR_ACCEL = "/imu/linear_acceleration"
     const val ENVIRONMENT = "/environment"
     const val DEVICE_TELEMETRY = "/device/telemetry"
+    const val AUDIO_MICROPHONE = "/audio/microphone"
     const val EVENTS = "/events"
 
     // Reserved for the future AI annotation pipeline (designed-in, not yet produced).

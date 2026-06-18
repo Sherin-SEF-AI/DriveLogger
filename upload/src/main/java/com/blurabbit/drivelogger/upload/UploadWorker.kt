@@ -10,14 +10,13 @@ import com.blurabbit.drivelogger.domain.model.UploadTask
 import com.blurabbit.drivelogger.domain.repository.UploadRepository
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 
 /**
- * Drains the upload queue: for each pending [UploadTask], computes/validates a SHA-256, runs the
- * provider's resumable multipart upload (persisting uploadId + completed parts so a killed upload
- * resumes), and updates status. Retryable failures return [Result.retry] for WorkManager's
+ * Drains the upload queue: for each pending [UploadTask], computes a SHA-256, runs the provider's
+ * resumable multipart upload, and updates status. On a retryable failure the uploadId and the set
+ * of already-completed parts are persisted (as [PartCodec]-encoded `completedPartsJson`) so the next
+ * run skips re-uploading them. Retryable failures return [Result.retry] for WorkManager's
  * exponential backoff.
  */
 @HiltWorker
@@ -59,12 +58,16 @@ class UploadWorker @AssistedInject constructor(
             )
             when (result) {
                 is UploadResult.Success ->
-                    uploadRepo.update(task.copy(status = UploadStatus.COMPLETED, bytesSent = file.length(), checksumSha256 = sha))
+                    uploadRepo.update(task.copy(
+                        status = UploadStatus.COMPLETED, bytesSent = file.length(),
+                        checksumSha256 = sha, completedPartsJson = null,
+                    ))
                 is UploadResult.Retryable -> {
                     anyRetryable = true
                     uploadRepo.update(task.copy(
                         status = UploadStatus.PAUSED, uploadId = result.uploadId,
                         retryCount = task.retryCount + 1, checksumSha256 = sha,
+                        completedPartsJson = PartCodec.encode(result.completedParts),
                     ))
                 }
                 is UploadResult.Fatal ->
@@ -74,17 +77,9 @@ class UploadWorker @AssistedInject constructor(
         return if (anyRetryable) Result.retry() else Result.success()
     }
 
-    private fun decodeParts(task: UploadTask): List<PartRef> {
-        // Completed parts are stashed in the (otherwise unused) checksum-adjacent metadata when paused.
-        return emptyList() // parts re-derived by re-PUT on resume; uploadId reuse avoids duplicate storage cost
-    }
+    private fun decodeParts(task: UploadTask): List<PartRef> = PartCodec.decode(task.completedPartsJson)
 
     companion object {
         const val UNIQUE_WORK = "blurabbit-upload"
     }
 }
-
-/** Helper to (de)serialize part refs if you choose to persist them in a JSON column. */
-internal fun List<PartRef>.toJson(): String = JSONArray().apply {
-    this@toJson.forEach { put(JSONObject().put("n", it.partNumber).put("etag", it.etag).put("size", it.size)) }
-}.toString()

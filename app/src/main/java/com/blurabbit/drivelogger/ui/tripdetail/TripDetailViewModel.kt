@@ -1,6 +1,8 @@
 package com.blurabbit.drivelogger.ui.tripdetail
 
 import android.content.Context
+import android.net.Uri
+import androidx.core.content.FileProvider
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -20,14 +22,19 @@ import com.blurabbit.drivelogger.domain.repository.EventRepository
 import com.blurabbit.drivelogger.domain.repository.TripRepository
 import com.blurabbit.drivelogger.domain.repository.UploadRepository
 import com.blurabbit.drivelogger.domain.usecase.DeleteTripUseCase
+import com.blurabbit.drivelogger.export.TripExporter
+import com.blurabbit.drivelogger.hdmap.HdMapWorker
 import com.blurabbit.drivelogger.recording.TripStorage
 import com.blurabbit.drivelogger.upload.UploadWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -41,9 +48,13 @@ class TripDetailViewModel @Inject constructor(
     private val uploadRepo: UploadRepository,
     private val storage: TripStorage,
     private val deleteTrip: DeleteTripUseCase,
+    private val exporter: TripExporter,
 ) : ViewModel() {
 
     val tripId: String = checkNotNull(savedStateHandle["tripId"])
+
+    private val _shareUri = MutableStateFlow<Uri?>(null)
+    val shareUri: StateFlow<Uri?> = _shareUri
 
     val trip: StateFlow<Trip?> =
         tripRepo.observeTrip(tripId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -83,6 +94,26 @@ class TripDetailViewModel @Inject constructor(
             .build()
         WorkManager.getInstance(context)
             .enqueueUniqueWork(UploadWorker.UNIQUE_WORK, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+    }
+
+    /** Build the share zip off the main thread, then publish a content:// uri for the chooser. */
+    fun export(includeVideo: Boolean) {
+        viewModelScope.launch {
+            val zip = withContext(Dispatchers.IO) { exporter.export(tripId, includeVideo) }
+            _shareUri.value = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", zip)
+        }
+    }
+
+    fun shareConsumed() { _shareUri.value = null }
+
+    /** Enrich the trip with OSM road context (offline) → hdmap.json, included in the next export. */
+    fun enrichHdMap() {
+        val request = OneTimeWorkRequestBuilder<HdMapWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setInputData(HdMapWorker.input(tripId))
+            .build()
+        WorkManager.getInstance(context)
+            .enqueueUniqueWork("${HdMapWorker.UNIQUE_WORK}-$tripId", ExistingWorkPolicy.REPLACE, request)
     }
 
     fun delete() = viewModelScope.launch { deleteTrip(tripId) }

@@ -20,8 +20,12 @@ class AwsV4Signer(
     private val region: String,
     private val service: String = "s3",
 ) {
-    /** Returns a signed copy of [request] (adds Authorization + x-amz-* headers). */
-    fun sign(request: Request, nowMillis: Long): Request {
+    /**
+     * Returns a signed copy of [request] (adds Authorization + x-amz-* headers). Any
+     * [extraSignedHeaders] (e.g. `x-amz-checksum-sha256`) are folded into both the canonical
+     * SignedHeaders set and the outgoing request, so the signature covers them.
+     */
+    fun sign(request: Request, nowMillis: Long, extraSignedHeaders: Map<String, String> = emptyMap()): Request {
         val amzDate = AMZ_DATE.get().format(Date(nowMillis))
         val dateStamp = DATE_STAMP.get().format(Date(nowMillis))
         val url = request.url
@@ -33,6 +37,7 @@ class AwsV4Signer(
             "x-amz-content-sha256" to payloadHash,
             "x-amz-date" to amzDate,
         )
+        extraSignedHeaders.forEach { (k, v) -> headers[k.lowercase(Locale.US)] = v }
 
         val canonicalHeaders = headers.entries.joinToString("") { "${it.key}:${it.value}\n" }
         val signedHeaders = headers.keys.joinToString(";")
@@ -61,6 +66,7 @@ class AwsV4Signer(
         return request.newBuilder()
             .header("x-amz-date", amzDate)
             .header("x-amz-content-sha256", payloadHash)
+            .apply { extraSignedHeaders.forEach { (k, v) -> header(k, v) } }
             .header("Authorization", authorization)
             .build()
     }
@@ -78,14 +84,15 @@ class AwsV4Signer(
             .joinToString("&") { "${uriEncode(it.first, true)}=${uriEncode(it.second, true)}" }
     }
 
-    private fun signatureKey(dateStamp: String): ByteArray {
+    /** Derives the SigV4 signing key (visible for known-answer tests against AWS's published vectors). */
+    internal fun signatureKey(dateStamp: String): ByteArray {
         val kDate = hmac("AWS4$secretKey".toByteArray(Charsets.UTF_8), dateStamp)
         val kRegion = hmac(kDate, region)
         val kService = hmac(kRegion, service)
         return hmac(kService, "aws4_request")
     }
 
-    private fun hmac(key: ByteArray, data: String): ByteArray =
+    internal fun hmac(key: ByteArray, data: String): ByteArray =
         Mac.getInstance("HmacSHA256").run {
             init(SecretKeySpec(key, "HmacSHA256")); doFinal(data.toByteArray(Charsets.UTF_8))
         }

@@ -91,6 +91,7 @@ data class UploadEntity(
     val totalBytes: Long,
     val checksumSha256: String?,
     val retryCount: Int,
+    val completedPartsJson: String? = null,
 )
 
 @Entity(
