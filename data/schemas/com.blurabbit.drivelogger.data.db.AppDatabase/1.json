@@ -1,0 +1,671 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "4356444a20f615df52a9ad32be3d3b83",
+    "entities": [
+      {
+        "tableName": "trips",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `name` TEXT, `vehicleId` TEXT, `vehicleName` TEXT, `driverName` TEXT, `routeName` TEXT, `weather` TEXT, `city` TEXT, `notes` TEXT, `status` TEXT NOT NULL, `startWallMs` INTEGER, `endWallMs` INTEGER, `startElapsedNs` INTEGER, `distanceMeters` REAL NOT NULL, `maxSpeedMps` REAL NOT NULL, `avgSpeedMps` REAL NOT NULL, `gpsSamples` INTEGER NOT NULL, `imuSamples` INTEGER NOT NULL, `frameCount` INTEGER NOT NULL, `eventCount` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "vehicleId",
+            "columnName": "vehicleId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "vehicleName",
+            "columnName": "vehicleName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "driverName",
+            "columnName": "driverName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "routeName",
+            "columnName": "routeName",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "weather",
+            "columnName": "weather",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "city",
+            "columnName": "city",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "notes",
+            "columnName": "notes",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startWallMs",
+            "columnName": "startWallMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "endWallMs",
+            "columnName": "endWallMs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "startElapsedNs",
+            "columnName": "startElapsedNs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "distanceMeters",
+            "columnName": "distanceMeters",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxSpeedMps",
+            "columnName": "maxSpeedMps",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avgSpeedMps",
+            "columnName": "avgSpeedMps",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "gpsSamples",
+            "columnName": "gpsSamples",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imuSamples",
+            "columnName": "imuSamples",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "frameCount",
+            "columnName": "frameCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "eventCount",
+            "columnName": "eventCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_trips_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trips_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_trips_startWallMs",
+            "unique": false,
+            "columnNames": [
+              "startWallMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_trips_startWallMs` ON `${TABLE_NAME}` (`startWallMs`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "recording_sessions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` TEXT NOT NULL, `segmentIndex` INTEGER NOT NULL, `startElapsedNs` INTEGER NOT NULL, `endElapsedNs` INTEGER, `mcapPath` TEXT NOT NULL, `mp4Path` TEXT, FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "segmentIndex",
+            "columnName": "segmentIndex",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startElapsedNs",
+            "columnName": "startElapsedNs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "endElapsedNs",
+            "columnName": "endElapsedNs",
+            "affinity": "INTEGER",
+            "notNull": false
+          },
+          {
+            "fieldPath": "mcapPath",
+            "columnName": "mcapPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mp4Path",
+            "columnName": "mp4Path",
+            "affinity": "TEXT",
+            "notNull": false
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_recording_sessions_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_recording_sessions_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` TEXT NOT NULL, `type` TEXT NOT NULL, `confidence` REAL NOT NULL, `unifiedTsNs` INTEGER NOT NULL, `latitude` REAL, `longitude` REAL, `speedMps` REAL, `evidenceJson` TEXT NOT NULL, FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "confidence",
+            "columnName": "confidence",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unifiedTsNs",
+            "columnName": "unifiedTsNs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "latitude",
+            "columnName": "latitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "longitude",
+            "columnName": "longitude",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "speedMps",
+            "columnName": "speedMps",
+            "affinity": "REAL",
+            "notNull": false
+          },
+          {
+            "fieldPath": "evidenceJson",
+            "columnName": "evidenceJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_events_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_events_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_events_unifiedTsNs",
+            "unique": false,
+            "columnNames": [
+              "unifiedTsNs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_events_unifiedTsNs` ON `${TABLE_NAME}` (`unifiedTsNs`)"
+          },
+          {
+            "name": "index_events_type",
+            "unique": false,
+            "columnNames": [
+              "type"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_events_type` ON `${TABLE_NAME}` (`type`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "uploads",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` TEXT NOT NULL, `artifact` TEXT NOT NULL, `provider` TEXT NOT NULL, `localPath` TEXT NOT NULL, `remoteKey` TEXT NOT NULL, `status` TEXT NOT NULL, `uploadId` TEXT, `bytesSent` INTEGER NOT NULL, `totalBytes` INTEGER NOT NULL, `checksumSha256` TEXT, `retryCount` INTEGER NOT NULL, FOREIGN KEY(`tripId`) REFERENCES `trips`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "artifact",
+            "columnName": "artifact",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "provider",
+            "columnName": "provider",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localPath",
+            "columnName": "localPath",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteKey",
+            "columnName": "remoteKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploadId",
+            "columnName": "uploadId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "bytesSent",
+            "columnName": "bytesSent",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "totalBytes",
+            "columnName": "totalBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "checksumSha256",
+            "columnName": "checksumSha256",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "retryCount",
+            "columnName": "retryCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_uploads_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_uploads_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_uploads_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_uploads_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "trips",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "tripId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "device_health",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` TEXT, `unifiedTsNs` INTEGER NOT NULL, `batteryPct` REAL NOT NULL, `charging` INTEGER NOT NULL, `cpuTemperatureC` REAL NOT NULL, `ramUsedBytes` INTEGER NOT NULL, `ramTotalBytes` INTEGER NOT NULL, `storageFreeBytes` INTEGER NOT NULL, `storageTotalBytes` INTEGER NOT NULL, `networkType` TEXT NOT NULL, `thermalStatus` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "unifiedTsNs",
+            "columnName": "unifiedTsNs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "batteryPct",
+            "columnName": "batteryPct",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "charging",
+            "columnName": "charging",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cpuTemperatureC",
+            "columnName": "cpuTemperatureC",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ramUsedBytes",
+            "columnName": "ramUsedBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "ramTotalBytes",
+            "columnName": "ramTotalBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageFreeBytes",
+            "columnName": "storageFreeBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "storageTotalBytes",
+            "columnName": "storageTotalBytes",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "networkType",
+            "columnName": "networkType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "thermalStatus",
+            "columnName": "thermalStatus",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_device_health_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_device_health_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_device_health_unifiedTsNs",
+            "unique": false,
+            "columnNames": [
+              "unifiedTsNs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_device_health_unifiedTsNs` ON `${TABLE_NAME}` (`unifiedTsNs`)"
+          }
+        ],
+        "foreignKeys": []
+      },
+      {
+        "tableName": "sensor_health",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `tripId` TEXT, `sourceId` TEXT NOT NULL, `unifiedTsNs` INTEGER NOT NULL, `expectedHz` REAL NOT NULL, `actualHz` REAL NOT NULL, `droppedSamples` INTEGER NOT NULL, `driftMs` REAL NOT NULL, `healthy` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "tripId",
+            "columnName": "tripId",
+            "affinity": "TEXT",
+            "notNull": false
+          },
+          {
+            "fieldPath": "sourceId",
+            "columnName": "sourceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unifiedTsNs",
+            "columnName": "unifiedTsNs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "expectedHz",
+            "columnName": "expectedHz",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actualHz",
+            "columnName": "actualHz",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "droppedSamples",
+            "columnName": "droppedSamples",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "driftMs",
+            "columnName": "driftMs",
+            "affinity": "REAL",
+            "notNull": true
+          },
+          {
+            "fieldPath": "healthy",
+            "columnName": "healthy",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_sensor_health_tripId",
+            "unique": false,
+            "columnNames": [
+              "tripId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_health_tripId` ON `${TABLE_NAME}` (`tripId`)"
+          },
+          {
+            "name": "index_sensor_health_sourceId",
+            "unique": false,
+            "columnNames": [
+              "sourceId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_health_sourceId` ON `${TABLE_NAME}` (`sourceId`)"
+          },
+          {
+            "name": "index_sensor_health_unifiedTsNs",
+            "unique": false,
+            "columnNames": [
+              "unifiedTsNs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_sensor_health_unifiedTsNs` ON `${TABLE_NAME}` (`unifiedTsNs`)"
+          }
+        ],
+        "foreignKeys": []
+      }
+    ],
+    "views": [],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '4356444a20f615df52a9ad32be3d3b83')"
+    ]
+  }
+}

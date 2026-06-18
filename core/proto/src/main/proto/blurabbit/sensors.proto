@@ -1,0 +1,123 @@
+// Blurabbit DriveLogger custom MCAP schemas.
+// All timestamps are nanoseconds on the unified elapsedRealtime timebase (see :core:clock).
+syntax = "proto3";
+
+package blurabbit;
+
+option java_package = "com.blurabbit.drivelogger.proto";
+option java_outer_classname = "SensorsProto";
+option java_multiple_files = true;
+
+// Generic 3-axis sample (accelerometer m/s^2, gyroscope rad/s, magnetometer uT, gravity,
+// linear acceleration). Reused across all /imu/* vector topics.
+message Vector3Stamped {
+  int64 unified_ns = 1;   // unified timebase
+  double x = 2;
+  double y = 3;
+  double z = 4;
+  int32 accuracy = 5;     // SensorManager accuracy level (-1 unknown)
+}
+
+// Rotation vector / orientation as a unit quaternion (ROTATION_VECTOR / GAME_ROTATION_VECTOR).
+message QuaternionStamped {
+  int64 unified_ns = 1;
+  double w = 2;
+  double x = 3;
+  double y = 4;
+  double z = 5;
+  double heading_accuracy_rad = 6;
+}
+
+// Environmental sensors; fields are NaN when the sensor is absent on the device.
+message Environment {
+  int64 unified_ns = 1;
+  double pressure_hpa = 2;       // barometer
+  double ambient_light_lux = 3;
+  double temperature_c = 4;
+  double relative_humidity = 5;  // 0..100 %
+}
+
+// Per-frame camera metadata. The pixels live in the sidecar MP4 (trip_NNN.mp4) — only the
+// reference + capture parameters are logged here, keeping MCAP small.
+message CameraFrameMeta {
+  int64 unified_ns = 1;          // frame presentation time on unified clock
+  int64 frame_id = 2;            // monotonically increasing per camera
+  string video_uri = 3;          // e.g. "trip_001.mp4"
+  string camera_id = 4;          // "front" | "rear" | usb id
+  int64 exposure_time_ns = 5;
+  int32 iso = 6;
+  double focal_length_mm = 7;
+  int32 width = 8;
+  int32 height = 9;
+  string codec = 10;             // "h264" | "h265"
+}
+
+// One satellite observation within a GnssRaw message.
+message Satellite {
+  int32 constellation = 1;       // GnssStatus.CONSTELLATION_* (1=GPS,3=GLONASS,4=QZSS,5=BEIDOU,6=GALILEO,7=IRNSS/NavIC)
+  int32 svid = 2;
+  double cn0_dbhz = 3;
+  double elevation_deg = 4;
+  double azimuth_deg = 5;
+  bool used_in_fix = 6;
+  double carrier_freq_hz = 7;
+}
+
+// Raw GNSS measurements + satellite status (advanced; populated where the API/device allows).
+message GnssRaw {
+  int64 unified_ns = 1;
+  int32 satellites_total = 2;
+  int32 satellites_used = 3;
+  repeated Satellite satellites = 4;
+  // Per-constellation visible counts, keyed by GnssStatus.CONSTELLATION_*.
+  map<int32, int32> constellation_counts = 5;
+}
+
+// Fix-level GPS data mirrored in a Blurabbit message for fields not in foxglove.LocationFix
+// (speed, bearing, accuracies). foxglove.LocationFix is logged in parallel for Studio.
+message GpsExtras {
+  int64 unified_ns = 1;
+  double speed_mps = 2;
+  double bearing_deg = 3;
+  double horizontal_accuracy_m = 4;
+  double vertical_accuracy_m = 5;
+  double speed_accuracy_mps = 6;
+  double bearing_accuracy_deg = 7;
+}
+
+// Device health / telemetry snapshot.
+message DeviceTelemetry {
+  int64 unified_ns = 1;
+  double battery_pct = 2;
+  bool charging = 3;
+  double cpu_temperature_c = 4;
+  int64 ram_used_bytes = 5;
+  int64 ram_total_bytes = 6;
+  int64 storage_free_bytes = 7;
+  int64 storage_total_bytes = 8;
+  string network_type = 9;       // "WIFI" | "CELLULAR" | "NONE"
+  int32 signal_strength_dbm = 10;
+  int32 thermal_status = 11;     // PowerManager.THERMAL_STATUS_*
+}
+
+// Detected driving event. Mirrored to the Room `events` table.
+message DrivingEvent {
+  int64 unified_ns = 1;
+  EventType type = 2;
+  double confidence = 3;         // 0..1
+  string evidence_json = 4;      // compact sensor evidence snapshot
+  double latitude = 5;
+  double longitude = 6;
+  double speed_mps = 7;
+
+  enum EventType {
+    UNKNOWN = 0;
+    HARD_BRAKING = 1;
+    SUDDEN_ACCELERATION = 2;
+    SHARP_TURN = 3;
+    POTHOLE_IMPACT = 4;
+    SPEED_BUMP = 5;
+    RAPID_LANE_CHANGE = 6;
+    AGGRESSIVE_DRIVING = 7;
+  }
+}

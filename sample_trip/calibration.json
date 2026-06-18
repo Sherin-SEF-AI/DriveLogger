@@ -1,0 +1,34 @@
+{
+  "camera_id": "0",
+  "vehicle_position": "front",
+  "model": "samsung SM-A176B",
+  "recording": {
+    "width": 1920,
+    "height": 1080
+  },
+  "active_array": {
+    "width": 4080,
+    "height": 3060
+  },
+  "pixel_array": {
+    "width": 4080,
+    "height": 3060
+  },
+  "physical_size_mm": {
+    "width": 5.2224,
+    "height": 3.9168
+  },
+  "focal_lengths_mm": [
+    4
+  ],
+  "intrinsics": {
+    "fx": 3125,
+    "fy": 3124.999755859375,
+    "cx": 2040,
+    "cy": 1530,
+    "skew": 0,
+    "model": "pinhole_derived",
+    "reference": "active_array",
+    "note": "derived from focal_length & physical_size; device did not expose LENS_INTRINSIC_CALIBRATION"
+  }
+}

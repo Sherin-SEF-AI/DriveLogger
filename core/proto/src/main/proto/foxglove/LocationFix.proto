@@ -1,0 +1,42 @@
+// Foxglove well-known schema (subset) — renders natively in Foxglove Studio on /gps/fix.
+// Source: https://github.com/foxglove/foxglove-sdk (foxglove.LocationFix)
+syntax = "proto3";
+
+package foxglove;
+
+import "google/protobuf/timestamp.proto";
+
+option java_package = "foxglove";
+option java_outer_classname = "LocationFixProto";
+option java_multiple_files = true;
+
+// A navigation satellite fix for any Global Navigation Satellite System.
+message LocationFix {
+  // Timestamp of the message.
+  google.protobuf.Timestamp timestamp = 6;
+
+  // Frame for the sensor. Latitude and longitude readings are at the origin of the frame.
+  string frame_id = 5;
+
+  // Latitude in degrees.
+  double latitude = 1;
+
+  // Longitude in degrees.
+  double longitude = 2;
+
+  // Altitude in meters.
+  double altitude = 3;
+
+  // Position covariance (m^2) defined relative to a tangential plane in row-major order
+  // (ENU: East, North, Up).
+  repeated double position_covariance = 4;
+
+  // Type of position covariance.
+  enum PositionCovarianceType {
+    UNKNOWN = 0;
+    APPROXIMATED = 1;
+    DIAGONAL_KNOWN = 2;
+    KNOWN = 3;
+  }
+  PositionCovarianceType position_covariance_type = 7;
+}

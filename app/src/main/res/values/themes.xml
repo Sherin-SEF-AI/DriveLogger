@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base Activity theme; Compose drives the actual UI styling via DriveLoggerTheme. -->
+    <style name="Theme.DriveLogger" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

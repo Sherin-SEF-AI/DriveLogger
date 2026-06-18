@@ -1,0 +1,17 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+**/build/
+/captures
+.externalNativeBuild
+.cxx
+*.apk
+*.aab
+*.keystore
+!debug.keystore
+
+# Sample dataset video is large; the MCAP/metadata/calibration are kept as the sample.
+sample_trip/*.mp4

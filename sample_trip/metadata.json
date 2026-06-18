@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "trip_id": "069937d7-7219-4374-b0c9-e6dafe7e549e",
+  "vehicle_id": null,
+  "vehicle_name": null,
+  "driver_name": null,
+  "route_name": null,
+  "city": null,
+  "weather": null,
+  "notes": null,
+  "start_wall_ms": 1781723015210,
+  "end_wall_ms": 1781723029381,
+  "duration_seconds": 14.11,
+  "distance_meters": 0,
+  "average_speed_mps": 0,
+  "max_speed_mps": 0.71,
+  "gps_samples": 1,
+  "imu_samples": 10429,
+  "frame_count": 391,
+  "event_count": 0,
+  "artifacts": {
+    "mcap": "trip.mcap",
+    "mcap_bytes": 614978,
+    "mp4": "trip.mp4",
+    "mp4_bytes": 27760088
+  }
+}
