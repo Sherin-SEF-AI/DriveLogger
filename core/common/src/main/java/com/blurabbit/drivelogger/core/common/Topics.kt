@@ -9,7 +9,8 @@ object Topics {
     const val CAMERA_FRONT = "/camera/front"
     const val CAMERA_REAR = "/camera/rear"
     const val GPS_FIX = "/gps/fix"
-    const val GNSS_RAW = "/gps/raw"
+    const val GPS_VELOCITY = "/gps/velocity" // blurabbit.GpsExtras (speed/bearing/accuracies/DOP)
+    const val GNSS_RAW = "/gps/raw"          // blurabbit.GnssRaw (satellite status)
     const val GNSS_MEASUREMENTS = "/gnss/measurements"
     const val IMU_ACCEL = "/imu/accelerometer"
     const val IMU_GYRO = "/imu/gyroscope"

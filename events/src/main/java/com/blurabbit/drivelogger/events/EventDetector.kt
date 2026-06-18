@@ -24,6 +24,9 @@ class EventDetector @Inject constructor(
     private val _events = MutableSharedFlow<DrivingEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<DrivingEvent> = _events.asSharedFlow()
 
+    /** Optional synchronous sink (every emitted event), used by offline replay. Null in production. */
+    var sink: ((DrivingEvent) -> Unit)? = null
+
     fun onAccel(s: AccelSample) { window.add(s); evaluate(s.unifiedNs) }
     fun onGyro(s: GyroSample) { window.add(s) }
     fun onGravity(s: GravitySample) { window.add(s) } // updates device→vehicle orientation only
@@ -62,7 +65,7 @@ class EventDetector @Inject constructor(
         }
     }
 
-    private fun emit(ev: DrivingEvent) { _events.tryEmit(ev) }
+    private fun emit(ev: DrivingEvent) { _events.tryEmit(ev); sink?.invoke(ev) }
 
     private fun min(a: Double, b: Double) = if (a < b) a else b
 

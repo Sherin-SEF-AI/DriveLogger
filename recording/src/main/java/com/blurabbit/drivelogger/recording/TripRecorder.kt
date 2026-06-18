@@ -209,7 +209,7 @@ class TripRecorder @Inject constructor(
                     updateDistance(fix.latitude, fix.longitude)
                 }
             }
-            Topics.GNSS_RAW -> (record.message as? GpsExtras)?.let { ex ->
+            Topics.GPS_VELOCITY -> (record.message as? GpsExtras)?.let { ex ->
                 currentSpeedMps = ex.speedMps
                 if (ex.speedMps > maxSpeedMps) maxSpeedMps = ex.speedMps
                 detector.onSpeed(SpeedSample(record.unifiedTsNs, ex.speedMps, lastLat ?: 0.0, lastLon ?: 0.0))

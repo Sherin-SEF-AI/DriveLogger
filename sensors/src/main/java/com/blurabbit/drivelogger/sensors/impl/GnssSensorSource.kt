@@ -68,6 +68,7 @@ class GnssSensorSource @Inject constructor(
 
     override val topics: List<TopicDescriptor> = listOf(
         TopicDescriptor(Topics.GPS_FIX, foxglove.LocationFix.getDescriptor()),
+        TopicDescriptor(Topics.GPS_VELOCITY, GpsExtras.getDescriptor()),
         TopicDescriptor(Topics.GNSS_RAW, GnssRaw.getDescriptor()),
         TopicDescriptor(Topics.GNSS_MEASUREMENTS, GnssMeasurements.getDescriptor()),
     )
@@ -170,7 +171,7 @@ class GnssSensorSource @Inject constructor(
                 }
             }
             .build()
-        producer.trySend(SensorRecord(Topics.GNSS_RAW, unified, extras))
+        producer.trySend(SensorRecord(Topics.GPS_VELOCITY, unified, extras))
     }
 
     private fun emitSatellites(producer: kotlinx.coroutines.channels.ProducerScope<SensorRecord>, status: GnssStatus) {
