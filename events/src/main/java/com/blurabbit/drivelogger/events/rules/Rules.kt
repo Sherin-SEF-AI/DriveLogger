@@ -22,23 +22,23 @@ private fun SensorWindow.event(
         .build()
 }
 
-/** Strong sustained deceleration. */
+/** Strong sustained deceleration (GPS-speed based — mounting-independent). */
 class HardBrakingRule @Inject constructor() : EventRule {
     override val type = EventType.HARD_BRAKING
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
-        val a = window.speedDerivative() ?: return null
+        val a = window.speedSlope() ?: return null
         if (a > -THRESHOLD) return null
         val confidence = min(1.0, (-a - THRESHOLD) / THRESHOLD + 0.5)
         return window.event(type, nowNs, confidence, """{"decel_mps2":${"%.2f".format(a)}}""")
     }
-    private companion object { const val THRESHOLD = 4.5 } // m/s²
+    private companion object { const val THRESHOLD = 4.0 } // m/s²
 }
 
-/** Aggressive throttle. */
+/** Aggressive throttle (GPS-speed based — mounting-independent). */
 class SuddenAccelerationRule @Inject constructor() : EventRule {
     override val type = EventType.SUDDEN_ACCELERATION
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
-        val a = window.speedDerivative() ?: return null
+        val a = window.speedSlope() ?: return null
         if (a < THRESHOLD) return null
         val confidence = min(1.0, (a - THRESHOLD) / THRESHOLD + 0.5)
         return window.event(type, nowNs, confidence, """{"accel_mps2":${"%.2f".format(a)}}""")
@@ -46,10 +46,11 @@ class SuddenAccelerationRule @Inject constructor() : EventRule {
     private companion object { const val THRESHOLD = 3.5 }
 }
 
-/** High yaw rate while moving. */
+/** High yaw rate about the vehicle's vertical axis while moving. Needs the gravity-derived up axis. */
 class SharpTurnRule @Inject constructor() : EventRule {
     override val type = EventType.SHARP_TURN
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
+        if (!window.gravityReady()) return null
         val yaw = window.peakYawRate()
         val speed = window.latestSpeed()?.speedMps ?: 0.0
         if (yaw < YAW_THRESHOLD || speed < MIN_SPEED) return null
@@ -59,11 +60,12 @@ class SharpTurnRule @Inject constructor() : EventRule {
     private companion object { const val YAW_THRESHOLD = 0.6; const val MIN_SPEED = 5.0 }
 }
 
-/** Sharp, brief vertical impact — only meaningful while the vehicle is actually moving. */
+/** Sharp, brief vehicle-vertical impact while moving. Needs the gravity-derived up axis. */
 class PotholeImpactRule @Inject constructor() : EventRule {
     override val type = EventType.POTHOLE_IMPACT
     override val cooldownMs = 1_500L
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
+        if (!window.gravityReady()) return null                     // need the vehicle vertical axis
         val speed = window.latestSpeed()?.speedMps ?: return null   // need a GPS fix to confirm motion
         if (speed < MIN_SPEED) return null                          // gate out stationary hand-jolts
         val v = window.peakVertical()
@@ -74,11 +76,12 @@ class PotholeImpactRule @Inject constructor() : EventRule {
     private companion object { const val THRESHOLD = 9.0; const val MIN_SPEED = 2.5 }
 }
 
-/** Moderate, broader vertical disturbance crossed at low-to-moderate speed. */
+/** Moderate, broader vehicle-vertical disturbance crossed at low-to-moderate speed. */
 class SpeedBumpRule @Inject constructor() : EventRule {
     override val type = EventType.SPEED_BUMP
     override val cooldownMs = 2_000L
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
+        if (!window.gravityReady()) return null
         val speed = window.latestSpeed()?.speedMps ?: return null
         val v = window.peakVertical()
         if (v < LOW || v >= HIGH || speed < MIN_SPEED || speed > MAX_SPEED) return null
@@ -87,10 +90,11 @@ class SpeedBumpRule @Inject constructor() : EventRule {
     private companion object { const val LOW = 4.0; const val HIGH = 9.0; const val MIN_SPEED = 2.5; const val MAX_SPEED = 15.0 }
 }
 
-/** Lateral oscillation suggesting a quick lane change. */
+/** Lateral oscillation suggesting a quick lane change. Needs full vehicle-frame calibration. */
 class RapidLaneChangeRule @Inject constructor() : EventRule {
     override val type = EventType.RAPID_LANE_CHANGE
     override fun evaluate(window: SensorWindow, nowNs: Long): DrivingEvent? {
+        if (!window.calibrated()) return null                       // lateral axis needs forward too
         val lat = window.peakLateral()
         val yaw = window.peakYawRate()
         val speed = window.latestSpeed()?.speedMps ?: 0.0

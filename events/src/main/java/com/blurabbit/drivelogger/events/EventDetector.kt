@@ -26,6 +26,7 @@ class EventDetector @Inject constructor(
 
     fun onAccel(s: AccelSample) { window.add(s); evaluate(s.unifiedNs) }
     fun onGyro(s: GyroSample) { window.add(s) }
+    fun onGravity(s: GravitySample) { window.add(s) } // updates device→vehicle orientation only
     fun onSpeed(s: SpeedSample) { window.add(s); evaluate(s.unifiedNs) }
 
     private fun evaluate(nowNs: Long) {

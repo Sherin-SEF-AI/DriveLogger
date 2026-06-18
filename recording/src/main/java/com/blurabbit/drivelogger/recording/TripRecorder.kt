@@ -194,8 +194,14 @@ class TripRecorder @Inject constructor(
                     detector.onGyro(GyroSample(record.unifiedTsNs, it.x, it.y, it.z))
                 }
             }
-            Topics.IMU_ACCEL, Topics.IMU_MAG, Topics.IMU_ROTATION,
-            Topics.IMU_GRAVITY -> imuSamples++
+            Topics.IMU_GRAVITY -> {
+                imuSamples++
+                // Gravity gives the vehicle's vertical axis → device→vehicle frame calibration.
+                (record.message as? Vector3Stamped)?.let {
+                    detector.onGravity(com.blurabbit.drivelogger.events.GravitySample(record.unifiedTsNs, it.x, it.y, it.z))
+                }
+            }
+            Topics.IMU_ACCEL, Topics.IMU_MAG, Topics.IMU_ROTATION -> imuSamples++
 
             Topics.GPS_FIX -> {
                 gpsSamples++
