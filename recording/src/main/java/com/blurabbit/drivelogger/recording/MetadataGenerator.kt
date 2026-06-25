@@ -1,6 +1,7 @@
 package com.blurabbit.drivelogger.recording
 
 import com.blurabbit.drivelogger.domain.model.Trip
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import javax.inject.Inject
@@ -11,7 +12,7 @@ import javax.inject.Inject
  */
 class MetadataGenerator @Inject constructor() {
 
-    fun write(trip: Trip, durationNs: Long, mcap: File, mp4: File?, dest: File): String {
+    fun write(trip: Trip, durationNs: Long, mcapSegments: List<File>, mp4Segments: List<File>, dest: File): String {
         val durationSec = durationNs / 1e9
         val stats = trip.stats
         val json = JSONObject().apply {
@@ -34,11 +35,16 @@ class MetadataGenerator @Inject constructor() {
             put("imu_samples", stats.imuSamples)
             put("frame_count", stats.frameCount)
             put("event_count", stats.eventCount)
+            put("segment_count", mcapSegments.size)
             put("artifacts", JSONObject().apply {
-                put("mcap", mcap.name)
-                put("mcap_bytes", mcap.length())
-                put("mp4", mp4?.name ?: JSONObject.NULL)
-                put("mp4_bytes", mp4?.length() ?: 0)
+                put("mcap", JSONArray().apply {
+                    mcapSegments.forEach { put(JSONObject().put("name", it.name).put("bytes", it.length())) }
+                })
+                put("mp4", JSONArray().apply {
+                    mp4Segments.forEach { put(JSONObject().put("name", it.name).put("bytes", it.length())) }
+                })
+                put("mcap_total_bytes", mcapSegments.sumOf { it.length() })
+                put("mp4_total_bytes", mp4Segments.sumOf { it.length() })
             })
         }
         val text = json.toString(2)

@@ -32,6 +32,7 @@ class TripRepositoryImpl @Inject constructor(
     override fun observeTrip(id: String): Flow<Trip?> = dao.observe(id).map { it?.toDomain() }
     override suspend fun getTrip(id: String): Trip? = dao.get(id)?.toDomain()
     override suspend fun inProgressTrips(): List<Trip> = dao.inProgress().map { it.toDomain() }
+    override suspend fun allTripsOnce(): List<Trip> = dao.allOnce().map { it.toDomain() }
 
     override suspend fun createTrip(profile: TripProfile, startElapsedNs: Long, startWallMs: Long): Trip {
         val entity = TripEntity(
@@ -91,6 +92,8 @@ class UploadRepositoryImpl @Inject constructor(
     override suspend fun update(task: UploadTask) = dao.update(task.toEntity())
     override suspend fun pending(): List<UploadTask> = dao.pending().map { it.toDomain() }
     override suspend fun byId(id: Long): UploadTask? = dao.byId(id)?.toDomain()
+    override suspend fun countForTrip(tripId: String): Int = dao.countForTrip(tripId)
+    override suspend fun incompleteForTrip(tripId: String): Int = dao.incompleteForTrip(tripId)
 }
 
 class HealthRepositoryImpl @Inject constructor(

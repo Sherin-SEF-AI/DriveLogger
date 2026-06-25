@@ -1,9 +1,11 @@
 package com.blurabbit.drivelogger.upload.di
 
 import com.blurabbit.drivelogger.domain.model.CloudProvider
+import com.blurabbit.drivelogger.domain.repository.UploadTrigger
 import com.blurabbit.drivelogger.upload.AzureBlobProvider
 import com.blurabbit.drivelogger.upload.CloudStorageProvider
 import com.blurabbit.drivelogger.upload.S3Provider
+import com.blurabbit.drivelogger.upload.WorkManagerUploadTrigger
 import dagger.Binds
 import dagger.MapKey
 import dagger.Module
@@ -28,6 +30,9 @@ abstract class UploadBindingsModule {
 
     @Binds @IntoMap @ProviderKey(CloudProvider.AZURE_BLOB)
     abstract fun azure(impl: AzureBlobProvider): CloudStorageProvider
+
+    @Binds
+    abstract fun uploadTrigger(impl: WorkManagerUploadTrigger): UploadTrigger
 }
 
 @Module

@@ -21,6 +21,9 @@ interface TripDao {
     @Query("SELECT * FROM trips WHERE status IN ('RECORDING','PAUSED')")
     suspend fun inProgress(): List<TripEntity>
 
+    @Query("SELECT * FROM trips ORDER BY COALESCE(startWallMs, 0) DESC")
+    suspend fun allOnce(): List<TripEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(trip: TripEntity)
 
@@ -77,6 +80,12 @@ interface UploadDao {
 
     @Query("SELECT * FROM uploads WHERE id = :id")
     suspend fun byId(id: Long): UploadEntity?
+
+    @Query("SELECT COUNT(*) FROM uploads WHERE tripId = :tripId")
+    suspend fun countForTrip(tripId: String): Int
+
+    @Query("SELECT COUNT(*) FROM uploads WHERE tripId = :tripId AND status != 'COMPLETED'")
+    suspend fun incompleteForTrip(tripId: String): Int
 }
 
 @Dao

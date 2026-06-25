@@ -19,7 +19,6 @@ import androidx.camera.video.VideoCapture
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.blurabbit.drivelogger.core.clock.ClockSynchronizer
-import com.blurabbit.drivelogger.core.common.Topics
 import com.blurabbit.drivelogger.proto.CameraFrameMeta
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -29,10 +28,13 @@ import javax.inject.Inject
 import kotlin.coroutines.resume
 
 /**
- * Records the road-facing video to an MP4 sidecar via CameraX [VideoCapture], while a
- * Camera2Interop session capture callback extracts per-frame metadata (exposure, ISO, focal
- * length, sensor timestamp) → [CameraFrameMeta] on `/camera/front`. Frame pixels stay in the MP4;
- * only references + capture params go to MCAP, keeping the log small.
+ * Records the road-facing video to per-segment MP4 files via CameraX [VideoCapture], while a
+ * Camera2Interop session capture callback extracts per-frame metadata (exposure, ISO, focal length,
+ * sensor timestamp) → [CameraFrameMeta] on `/camera/front`. Frame pixels stay in the MP4; only
+ * references + capture params go to MCAP.
+ *
+ * Supports [rotate] (stop the current MP4, start a new one at a segment boundary) and
+ * [requestQuality] (thermal step-down applied at the next rotation, avoiding mid-segment rebinds).
  *
  * NB: "front" here means *front-of-vehicle* (the phone's back camera mounted facing the road).
  */
@@ -42,69 +44,47 @@ class CameraController @Inject constructor(
 ) {
     private var recording: Recording? = null
     private var provider: ProcessCameraProvider? = null
+    private var recorder: Recorder? = null
+    private var owner: LifecycleOwner? = null
+    private var onFrameMeta: ((CameraFrameMeta) -> Unit)? = null
     private val frameId = AtomicLong(0)
-    @Volatile private var videoUri: String = "trip.mp4"
+    @Volatile private var videoUri: String = ""
+    @Volatile private var currentQuality: Quality = Quality.FHD
+    @Volatile private var targetQuality: Quality = Quality.FHD
 
-    @OptIn(ExperimentalCamera2Interop::class)
+    /** Request a quality (e.g. thermal step-down). Applied at the next [rotate]. */
+    fun requestQuality(quality: Quality) { targetQuality = quality }
+
     @SuppressLint("MissingPermission", "RestrictedApi")
-    suspend fun start(
-        owner: LifecycleOwner,
-        output: File,
-        onFrameMeta: (CameraFrameMeta) -> Unit,
-    ): Boolean {
+    suspend fun start(owner: LifecycleOwner, output: File, onFrameMeta: (CameraFrameMeta) -> Unit): Boolean {
         val cameraProvider = awaitFuture(ProcessCameraProvider.getInstance(context)) ?: return false
         provider = cameraProvider
-        videoUri = output.name
+        this.owner = owner
+        this.onFrameMeta = onFrameMeta
+        currentQuality = targetQuality
+        return bindAndRecord(output)
+    }
 
-        val recorder = Recorder.Builder()
-            .setQualitySelector(QualitySelector.from(Quality.FHD)) // 1080p
-            .build()
-
-        // Attach the per-frame metadata callback to the SAME builder we bind.
-        val videoBuilder = VideoCapture.Builder(recorder)
-        Camera2Interop.Extender(videoBuilder).setSessionCaptureCallback(
-            object : CameraCaptureSession.CaptureCallback() {
-                override fun onCaptureCompleted(
-                    session: CameraCaptureSession,
-                    request: CaptureRequest,
-                    result: TotalCaptureResult,
-                ) {
-                    val sensorTs = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
-                    val unified = sync.observeAndConvert("camera", sensorTs)
-                    val exposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L
-                    val iso = result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0
-                    val focal = result.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f
-                    onFrameMeta(
-                        CameraFrameMeta.newBuilder()
-                            .setUnifiedNs(unified)
-                            .setFrameId(frameId.getAndIncrement())
-                            .setVideoUri(videoUri)
-                            .setCameraId("front")
-                            .setExposureTimeNs(exposure)
-                            .setIso(iso)
-                            .setFocalLengthMm(focal.toDouble())
-                            .setWidth(1920).setHeight(1080)
-                            .setCodec("h264")
-                            .build(),
-                    )
-                }
-            },
-        )
-        val videoCapture = videoBuilder.build()
-
-        return suspendCancellableCoroutine { cont ->
-            ContextCompat.getMainExecutor(context).execute {
-                try {
-                    cameraProvider.unbindAll()
-                    cameraProvider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, videoCapture)
-                    recording = recorder
-                        .prepareRecording(context, FileOutputOptions.Builder(output).build())
-                        .start(ContextCompat.getMainExecutor(context)) { /* VideoRecordEvent stream */ }
-                    cont.resume(true)
-                } catch (t: Throwable) {
-                    cont.resume(false)
-                }
+    /** Close the current MP4 and start a new one (segment boundary); re-binds if quality changed. */
+    @SuppressLint("RestrictedApi")
+    suspend fun rotate(newFile: File): Boolean {
+        val cameraProvider = provider ?: return false
+        if (targetQuality != currentQuality) {
+            currentQuality = targetQuality
+            return suspendOnMain {
+                runCatching { recording?.stop() }.also { recording = null }
+                runCatching { cameraProvider.unbindAll() }
+                bindOnMainAndRecord(newFile)
             }
+        }
+        // Same quality: reuse the bound VideoCapture, just swap the output file.
+        val rec = recorder ?: return false
+        return suspendOnMain {
+            runCatching { recording?.stop() }
+            videoUri = newFile.name
+            recording = rec.prepareRecording(context, FileOutputOptions.Builder(newFile).build())
+                .start(ContextCompat.getMainExecutor(context)) { }
+            true
         }
     }
 
@@ -114,13 +94,71 @@ class CameraController @Inject constructor(
         runCatching { recording?.stop() }
         recording = null
         runCatching { provider?.unbindAll() }
-        provider = null
+        recorder = null
+        owner = null
     }
+
+    // ---- internals -----------------------------------------------------------------------
+
+    private suspend fun bindAndRecord(output: File): Boolean = suspendOnMain { bindOnMainAndRecord(output) }
+
+    @OptIn(ExperimentalCamera2Interop::class)
+    @SuppressLint("MissingPermission", "RestrictedApi")
+    private fun bindOnMainAndRecord(output: File): Boolean = try {
+        val cameraProvider = provider!!
+        val lifecycleOwner = owner!!
+        val cb = onFrameMeta!!
+        val (w, h) = dimsFor(currentQuality)
+
+        val rec = Recorder.Builder().setQualitySelector(QualitySelector.from(currentQuality)).build()
+        recorder = rec
+        val videoBuilder = VideoCapture.Builder(rec)
+        Camera2Interop.Extender(videoBuilder).setSessionCaptureCallback(
+            object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, r: CaptureRequest, result: TotalCaptureResult) {
+                    val sensorTs = result.get(CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    val unified = sync.observeAndConvert("camera", sensorTs)
+                    cb(
+                        CameraFrameMeta.newBuilder()
+                            .setUnifiedNs(unified)
+                            .setFrameId(frameId.getAndIncrement())
+                            .setVideoUri(videoUri)
+                            .setCameraId("front")
+                            .setExposureTimeNs(result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L)
+                            .setIso(result.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0)
+                            .setFocalLengthMm((result.get(CaptureResult.LENS_FOCAL_LENGTH) ?: 0f).toDouble())
+                            .setWidth(w).setHeight(h)
+                            .setCodec("h264")
+                            .build(),
+                    )
+                }
+            },
+        )
+        cameraProvider.unbindAll()
+        cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, videoBuilder.build())
+        videoUri = output.name
+        recording = rec.prepareRecording(context, FileOutputOptions.Builder(output).build())
+            .start(ContextCompat.getMainExecutor(context)) { }
+        true
+    } catch (t: Throwable) {
+        false
+    }
+
+    private fun dimsFor(q: Quality): Pair<Int, Int> = when (q) {
+        Quality.UHD -> 3840 to 2160
+        Quality.FHD -> 1920 to 1080
+        Quality.HD -> 1280 to 720
+        Quality.SD -> 720 to 480
+        else -> 1920 to 1080
+    }
+
+    private suspend fun suspendOnMain(block: () -> Boolean): Boolean =
+        suspendCancellableCoroutine { cont ->
+            ContextCompat.getMainExecutor(context).execute { cont.resume(runCatching { block() }.getOrDefault(false)) }
+        }
 
     private suspend fun <T> awaitFuture(future: com.google.common.util.concurrent.ListenableFuture<T>): T? =
         suspendCancellableCoroutine { cont ->
-            future.addListener({
-                cont.resume(runCatching { future.get() }.getOrNull())
-            }, ContextCompat.getMainExecutor(context))
+            future.addListener({ cont.resume(runCatching { future.get() }.getOrNull()) }, ContextCompat.getMainExecutor(context))
         }
 }

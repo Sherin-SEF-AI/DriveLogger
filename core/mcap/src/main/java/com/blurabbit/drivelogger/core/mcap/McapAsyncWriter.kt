@@ -41,9 +41,15 @@ class McapAsyncWriter(
     val enqueued = AtomicLong(0)
     val written = AtomicLong(0)
 
+    @Volatile private var writerRef: McapWriter? = null
+
+    /** Approximate bytes written to disk so far — drives size-based segment rotation. */
+    fun approxBytes(): Long = writerRef?.approxBytes() ?: 0L
+
     init {
         scope.launch {
             val writer = McapWriter(file, config)
+            writerRef = writer
             val channelByTopic = HashMap<String, Int>()
             // Pre-register every known topic so channel ids are stable from the first message.
             schemas.forEach { s ->

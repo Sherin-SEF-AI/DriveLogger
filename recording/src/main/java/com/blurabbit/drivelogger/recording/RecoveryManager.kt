@@ -21,17 +21,20 @@ class RecoveryManager @Inject constructor(
     suspend fun recoverInterruptedTrips(): Int = withContext(Dispatchers.IO) {
         var recovered = 0
         tripRepo.inProgressTrips().forEach { trip ->
-            val mcap = storage.mcapFile(trip.id)
-            if (!mcap.exists()) {
+            val segments = storage.mcapSegments(trip.id)
+            if (segments.isEmpty()) {
                 tripRepo.updateStatus(trip.id, TripStatus.FAILED)
                 return@forEach
             }
-            if (!hasValidFooter(mcap)) {
-                val tmp = File(mcap.parentFile, "trip.recovered.mcap")
-                val result = McapRecoveryTool.recover(mcap, tmp)
-                if (result != null && tmp.exists()) {
-                    if (mcap.delete()) tmp.renameTo(mcap) else tmp.delete()
-                    recovered++
+            // Only the last segment can be truncated (a crash mid-write); earlier ones are finalized.
+            segments.forEach { mcap ->
+                if (mcap.length() > 0 && !hasValidFooter(mcap)) {
+                    val tmp = File(mcap.parentFile, mcap.name + ".recovered")
+                    val result = McapRecoveryTool.recover(mcap, tmp)
+                    if (result != null && tmp.exists()) {
+                        if (mcap.delete()) tmp.renameTo(mcap) else tmp.delete()
+                        recovered++
+                    }
                 }
             }
             tripRepo.updateStatus(trip.id, TripStatus.STOPPED)

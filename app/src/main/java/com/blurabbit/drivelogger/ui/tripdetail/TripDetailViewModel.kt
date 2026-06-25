@@ -51,18 +51,17 @@ class TripDetailViewModel @Inject constructor(
     val events: StateFlow<List<DrivingEvent>> =
         eventRepo.observeEvents(tripId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun artifacts(): List<File> = listOf(
-        storage.mcapFile(tripId), storage.mp4File(tripId), storage.metadataFile(tripId),
-    ).filter { it.exists() }
+    fun artifacts(): List<File> =
+        (storage.mcapSegments(tripId) + storage.segMp4Files(tripId) + storage.metadataFile(tripId))
+            .filter { it.exists() }
 
     fun upload(provider: CloudProvider) {
         viewModelScope.launch {
             val date = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date())
-            listOf(
-                ArtifactKind.MCAP to storage.mcapFile(tripId),
-                ArtifactKind.MP4 to storage.mp4File(tripId),
-                ArtifactKind.METADATA to storage.metadataFile(tripId),
-            ).filter { it.second.exists() }.forEach { (kind, file) ->
+            val items = storage.mcapSegments(tripId).map { ArtifactKind.MCAP to it } +
+                storage.segMp4Files(tripId).map { ArtifactKind.MP4 to it } +
+                listOf(ArtifactKind.METADATA to storage.metadataFile(tripId))
+            items.filter { it.second.exists() }.forEach { (kind, file) ->
                 uploadRepo.enqueue(
                     UploadTask(
                         tripId = tripId, artifact = kind, provider = provider,

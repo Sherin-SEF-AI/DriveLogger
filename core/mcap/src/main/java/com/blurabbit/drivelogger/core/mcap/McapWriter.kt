@@ -37,7 +37,7 @@ class McapWriter(
     private class Sink(out: OutputStream) {
         private val buffered = BufferedOutputStream(out, 1 shl 16)
         private val crc = CRC32()
-        var position: Long = 0L; private set
+        @Volatile var position: Long = 0L; private set // read cross-thread for segment-size checks
         fun write(b: ByteArray) { buffered.write(b); position += b.size; crc.update(b) }
         fun runningCrc(): Long = crc.value
         fun flush() = buffered.flush()
@@ -144,6 +144,9 @@ class McapWriter(
     }
 
     // ---- messages ------------------------------------------------------------------------
+
+    /** Approximate bytes written to disk so far (for segment-size rotation). Thread-safe to read. */
+    fun approxBytes(): Long = sink.position
 
     fun writeProto(channelId: Int, logTimeNs: Long, message: MessageLite) =
         writeMessage(channelId, logTimeNs, message.toByteArray())

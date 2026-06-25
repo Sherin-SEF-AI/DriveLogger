@@ -1,5 +1,6 @@
 package com.blurabbit.drivelogger.recording
 
+import androidx.camera.video.Quality
 import androidx.lifecycle.LifecycleOwner
 import com.blurabbit.drivelogger.core.clock.ClockSynchronizer
 import com.blurabbit.drivelogger.core.clock.DriftMonitor
@@ -13,9 +14,14 @@ import com.blurabbit.drivelogger.domain.model.DrivingEventType
 import com.blurabbit.drivelogger.domain.model.RecordingSession
 import com.blurabbit.drivelogger.domain.model.TripStats
 import com.blurabbit.drivelogger.domain.model.TripStatus
+import com.blurabbit.drivelogger.domain.model.ArtifactKind
+import com.blurabbit.drivelogger.domain.model.UploadStatus
+import com.blurabbit.drivelogger.domain.model.UploadTask
 import com.blurabbit.drivelogger.domain.repository.EventRepository
 import com.blurabbit.drivelogger.domain.repository.HealthRepository
 import com.blurabbit.drivelogger.domain.repository.TripRepository
+import com.blurabbit.drivelogger.domain.repository.UploadRepository
+import com.blurabbit.drivelogger.domain.repository.UploadTrigger
 import com.blurabbit.drivelogger.events.AccelSample
 import com.blurabbit.drivelogger.events.EventDetector
 import com.blurabbit.drivelogger.events.GyroSample
@@ -63,12 +69,16 @@ class TripRecorder @Inject constructor(
     private val drift: DriftMonitor,
     private val clock: MonotonicClock,
     private val mcapConfig: McapWriterConfig,
+    private val config: RecordingConfig,
     private val detector: EventDetector,
     private val storage: TripStorage,
     private val camera: CameraController,
     private val tripRepo: TripRepository,
     private val eventRepo: EventRepository,
     private val healthRepo: HealthRepository,
+    private val uploadRepo: UploadRepository,
+    private val uploadTrigger: UploadTrigger,
+    private val retention: RetentionManager,
     private val metadataGen: MetadataGenerator,
 ) : RecordingController {
 
@@ -76,10 +86,18 @@ class TripRecorder @Inject constructor(
     override val state: StateFlow<RecordingState> = _state.asStateFlow()
 
     private val lifecycle = Mutex()
+    private val rotateMutex = Mutex()
     private var scope: CoroutineScope? = null
-    private var writer: McapAsyncWriter? = null
+    private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    @Volatile private var writer: McapAsyncWriter? = null
     private var sessionId: Long = -1
     private var lifecycleOwner: LifecycleOwner? = null
+    @Volatile private var cameraOn = false
+
+    // Segment state.
+    private var segmentIndex = 0
+    private var segmentStartNs = 0L
+    private var currentSchemas: List<TopicSchema> = emptyList()
 
     // Counters (some written from the camera thread → atomic).
     private var imuSamples = 0L
@@ -108,21 +126,19 @@ class TripRecorder @Inject constructor(
         clock.captureEpochAnchor() // anchor monotonic→epoch so MCAP log_time is real wall time
         resetCounters()
         sync.reset(); drift.reset()
+        segmentIndex = 0
+        segmentStartNs = startElapsedNs
 
         val available = sensorSources.filter { it.isAvailable() }
-        val schemas = buildSchemas(available)
-        val mcap = storage.mcapFile(tripId)
-        val w = McapAsyncWriter(mcap, mcapConfig, schemas)
+        currentSchemas = buildSchemas(available)
+        val mcap = storage.segMcap(tripId, segmentIndex)
+        val w = McapAsyncWriter(mcap, mcapConfig, currentSchemas)
         writer = w
-
-        // Per-trip camera calibration (intrinsics + distortion) as a portable MCAP attachment.
-        CameraCalibration.readBackCameraJson(appContext)?.let { cal ->
-            w.attachment("calibration.json", "application/json", cal.toByteArray(), clock.toEpochNanos(startElapsedNs))
-        }
+        writeCalibration(w)
 
         sessionId = tripRepo.addSession(
             RecordingSession(
-                tripId = tripId, segmentIndex = 0, startElapsedNs = startElapsedNs,
+                tripId = tripId, segmentIndex = segmentIndex, startElapsedNs = startElapsedNs,
                 endElapsedNs = null, mcapPath = mcap.absolutePath, mp4Path = null,
             ),
         )
@@ -130,20 +146,27 @@ class TripRecorder @Inject constructor(
 
         val s = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         scope = s
-        launchPipeline(s, available, w)
-        maybeStartCamera(s, w)
+        launchPipeline(s, available)
+        maybeStartCamera(s)
         _state.value = RecordingState(phase = RecordingPhase.RECORDING, tripId = tripId, startElapsedNs = startElapsedNs)
     }
 
-    private fun launchPipeline(s: CoroutineScope, available: List<SensorSource>, w: McapAsyncWriter) {
+    private suspend fun writeCalibration(w: McapAsyncWriter) {
+        // Per-segment camera calibration (intrinsics + distortion) as a portable MCAP attachment.
+        CameraCalibration.readBackCameraJson(appContext)?.let { cal ->
+            w.attachment("calibration.json", "application/json", cal.toByteArray(), clock.toEpochNanos(clock.nowNanos()))
+        }
+    }
+
+    private fun launchPipeline(s: CoroutineScope, available: List<SensorSource>) {
         // Single consumer over all sensor flows — keeps the event detector single-threaded.
         val merged = available.map { it.start(s).buffer(256) }
-        s.launch { merge(*merged.toTypedArray()).collect { handleRecord(it, w) } }
+        s.launch { merge(*merged.toTypedArray()).collect { handleRecord(it) } }
 
         // Driving events → /events topic + Room.
         s.launch {
             detector.events.collect { ev ->
-                w.write(Topics.EVENTS, clock.toEpochNanos(ev.unifiedNs), ev)
+                runCatching { writer?.write(Topics.EVENTS, clock.toEpochNanos(ev.unifiedNs), ev) }
                 eventCount++
                 eventRepo.insert(
                     DrivingEvent(
@@ -168,10 +191,10 @@ class TripRecorder @Inject constructor(
         s.launch { stateTicker(available) }
     }
 
-    private suspend fun handleRecord(record: SensorRecord, w: McapAsyncWriter) {
+    private suspend fun handleRecord(record: SensorRecord) {
         drift.validate(record.topic, record.unifiedTsNs, null)
         // log_time = epoch (for tooling); message body keeps raw unified_ns for cross-sensor sync.
-        w.write(record.topic, clock.toEpochNanos(record.unifiedTsNs), record.message)
+        runCatching { writer?.write(record.topic, clock.toEpochNanos(record.unifiedTsNs), record.message) }
 
         when (record.topic) {
             Topics.IMU_LINEAR_ACCEL -> {
@@ -202,16 +225,59 @@ class TripRecorder @Inject constructor(
             }
             Topics.DEVICE_TELEMETRY -> (record.message as? DeviceTelemetry)?.let { persistTelemetry(it) }
         }
+        maybeRotate()
     }
 
-    private suspend fun maybeStartCamera(s: CoroutineScope, w: McapAsyncWriter) {
+    /** Roll to a new segment when the time or size bound is reached (runs on the consumer coroutine). */
+    private suspend fun maybeRotate() {
+        val w = writer ?: return
+        val now = clock.nowNanos()
+        val bySize = w.approxBytes() >= config.segmentBytes
+        val byTime = now - segmentStartNs >= config.segmentSeconds * 1_000_000_000L
+        if (!bySize && !byTime) return
+        if (!rotateMutex.tryLock()) return
+        try {
+            val id = tripId ?: return
+            val closingIndex = segmentIndex
+            // Build the new segment writer first, then swap, then close the old one (no write gap).
+            segmentIndex += 1
+            segmentStartNs = now
+            val newMcap = storage.segMcap(id, segmentIndex)
+            val nw = McapAsyncWriter(newMcap, mcapConfig, currentSchemas)
+            writeCalibration(nw)
+            val old = writer
+            writer = nw
+            sessionId = tripRepo.addSession(
+                RecordingSession(
+                    tripId = id, segmentIndex = segmentIndex, startElapsedNs = now,
+                    endElapsedNs = null, mcapPath = newMcap.absolutePath, mp4Path = null,
+                ),
+            )
+            old?.close()
+            tripRepo.closeSession(
+                /* old sessionId is now overwritten; close the prior segment via its index */
+                sessionForIndex(id, closingIndex), now,
+                if (cameraOn) storage.segMp4(id, closingIndex).absolutePath else null,
+            )
+            if (cameraOn) camera.rotate(storage.segMp4(id, segmentIndex))
+            enqueueSegmentUpload(id, closingIndex)
+        } finally {
+            rotateMutex.unlock()
+        }
+    }
+
+    private suspend fun sessionForIndex(tripId: String, index: Int): Long =
+        tripRepo.sessionsFor(tripId).firstOrNull { it.segmentIndex == index }?.id ?: -1
+
+    private suspend fun maybeStartCamera(s: CoroutineScope) {
         val owner = lifecycleOwner ?: return
         if (!hasCameraPermission()) return
-        val mp4 = storage.mp4File(tripId!!)
+        val mp4 = storage.segMp4(tripId!!, segmentIndex)
         val ok = camera.start(owner, mp4) { meta: CameraFrameMeta ->
-            if (w.offer(Topics.CAMERA_FRONT, clock.toEpochNanos(meta.unifiedNs), meta)) frameCount.incrementAndGet()
+            if (writer?.offer(Topics.CAMERA_FRONT, clock.toEpochNanos(meta.unifiedNs), meta) == true) frameCount.incrementAndGet()
             else droppedWrites.incrementAndGet()
         }
+        cameraOn = ok
         if (ok) tripRepo.closeSession(sessionId, clock.nowNanos(), mp4.absolutePath)
     }
 
@@ -228,10 +294,10 @@ class TripRecorder @Inject constructor(
     override suspend fun resume() = lifecycle.withLock {
         if (_state.value.phase != RecordingPhase.PAUSED) return@withLock
         val s = scope ?: return@withLock
-        val w = writer ?: return@withLock
+        writer ?: return@withLock
         val available = sensorSources.filter { it.isAvailable() }
-        launchPipeline(s, available, w)
-        maybeStartCamera(s, w)
+        launchPipeline(s, available)
+        maybeStartCamera(s)
         _state.value = _state.value.copy(phase = RecordingPhase.RECORDING)
     }
 
@@ -262,39 +328,111 @@ class TripRecorder @Inject constructor(
             w.close()
         }
         writer = null
+        tripRepo.closeSession(sessionId, clock.nowNanos(), if (cameraOn) storage.segMp4(id, segmentIndex).absolutePath else null)
 
-        // metadata.json sidecar (file sizes + end time now final).
+        // metadata.json sidecar over all segments (file sizes + end time now final).
         tripRepo.getTrip(id)?.let { trip ->
             metadataGen.write(
                 trip.copy(stats = stats), durationNs,
-                storage.mcapFile(id), storage.mp4File(id).takeIf { it.exists() },
+                storage.mcapSegments(id),
+                storage.segMp4Files(id),
                 storage.metadataFile(id),
             )
         }
 
+        // Hands-off upload: enqueue every segment + the metadata, then kick the worker.
+        enqueueTripUpload(id)
+        // Reclaim space from older, fully-uploaded trips (keeps last N).
+        runCatching { retention.sweep() }
+
         scope?.coroutineContext?.get(Job)?.cancel()
         scope = null
         tripId = null
+        cameraOn = false
         _state.value = RecordingState(phase = RecordingPhase.IDLE)
+    }
+
+    // ---- auto-upload ---------------------------------------------------------------------
+
+    private suspend fun enqueueSegmentUpload(tripId: String, index: Int) {
+        if (!config.autoUpload) return
+        val provider = uploadTrigger.defaultProvider() ?: return
+        val prefix = remotePrefix(tripId)
+        val artifacts = buildList {
+            storage.segMcap(tripId, index).takeIf { it.exists() }?.let { add(it to ArtifactKind.MCAP) }
+            storage.segMp4(tripId, index).takeIf { it.exists() }?.let { add(it to ArtifactKind.MP4) }
+        }
+        artifacts.forEach { (file, kind) ->
+            uploadRepo.enqueue(
+                UploadTask(
+                    tripId = tripId, artifact = kind, provider = provider,
+                    localPath = file.absolutePath, remoteKey = "$prefix/${file.name}",
+                    status = UploadStatus.PENDING, totalBytes = file.length(),
+                ),
+            )
+        }
+        uploadTrigger.schedule()
+    }
+
+    private suspend fun enqueueTripUpload(tripId: String) {
+        val provider = if (config.autoUpload) uploadTrigger.defaultProvider() else null
+        if (provider == null) return
+        val prefix = remotePrefix(tripId)
+        val files = storage.mcapSegments(tripId).map { it to ArtifactKind.MCAP } +
+            storage.segMp4Files(tripId).map { it to ArtifactKind.MP4 } +
+            (storage.metadataFile(tripId).takeIf { it.exists() }?.let { listOf(it to ArtifactKind.METADATA) } ?: emptyList())
+        files.forEach { (file, kind) ->
+            uploadRepo.enqueue(
+                UploadTask(
+                    tripId = tripId, artifact = kind, provider = provider,
+                    localPath = file.absolutePath, remoteKey = "$prefix/${file.name}",
+                    status = UploadStatus.PENDING, totalBytes = file.length(),
+                ),
+            )
+        }
+        uploadTrigger.schedule()
+    }
+
+    private fun remotePrefix(tripId: String): String {
+        val date = clock.wallEpochNanosNow() / 1_000_000
+        // yyyy-MM-dd derived without locale-format dependency on the hot path.
+        val d = java.util.Date(date)
+        val fmt = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
+        return "${fmt.format(d)}/$tripId"
     }
 
     private suspend fun stateTicker(available: List<SensorSource>) {
         val gnss = available.filterIsInstance<GnssSensorSource>().firstOrNull()
         while (true) {
-            val (satTotal, satUsed) = gnss?.satelliteCounts() ?: (0 to 0)
+            val free = storage.freeBytes()
             _state.value = _state.value.copy(
                 durationNs = clock.nowNanos() - startElapsedNs,
                 currentSpeedMps = currentSpeedMps,
-                satellitesTotal = satTotal, satellitesUsed = satUsed,
+                satellitesTotal = gnss?.satelliteCounts()?.first ?: 0,
+                satellitesUsed = gnss?.satelliteCounts()?.second ?: 0,
                 distanceMeters = distanceMeters, maxSpeedMps = maxSpeedMps,
                 gpsSamples = gpsSamples, imuSamples = imuSamples,
                 frameCount = frameCount.get(), eventCount = eventCount,
-                storageFreeBytes = storage.freeBytes(),
+                storageFreeBytes = free,
                 droppedWrites = droppedWrites.get(),
                 sensorHealth = available.map { it.health() },
             )
+            // Storage watchdog: stop gracefully before the disk fills (the 14 GB problem).
+            if (free < config.freeSpaceFloorBytes) {
+                pushWarning("low storage (${free / (1024 * 1024)} MB) — stopping")
+                triggerGracefulStop(); return
+            }
             kotlinx.coroutines.delay(500)
         }
+    }
+
+    /** Stop from outside the recording scope so cancelling the scope can't deadlock the caller. */
+    private fun triggerGracefulStop() {
+        watchdogScope.launch { runCatching { stop() } }
+    }
+
+    private fun pushWarning(msg: String) {
+        _state.value = _state.value.copy(warnings = (_state.value.warnings + msg).takeLast(10))
     }
 
     private suspend fun persistTelemetry(t: DeviceTelemetry) {
@@ -310,6 +448,20 @@ class TripRecorder @Inject constructor(
             ),
         )
         _state.value = _state.value.copy(batteryPct = t.batteryPct, thermalStatus = t.thermalStatus)
+
+        // Active mitigation: thermal step-down (applied at next segment rotation) + low-battery stop.
+        camera.requestQuality(qualityForThermal(t.thermalStatus))
+        if (!t.charging && t.batteryPct in 0.0..config.minBatteryPct) {
+            pushWarning("battery ${t.batteryPct.toInt()}% — stopping")
+            triggerGracefulStop()
+        }
+    }
+
+    private fun qualityForThermal(status: Int): Quality = when {
+        status >= 4 -> Quality.SD      // CRITICAL
+        status == 3 -> Quality.HD      // SEVERE
+        status == 2 -> Quality.HD      // MODERATE
+        else -> Quality.FHD            // NONE / LIGHT
     }
 
     private fun buildSchemas(available: List<SensorSource>): List<TopicSchema> {
