@@ -1,0 +1,28 @@
+// Foxglove well-known schema — renders in the Foxglove Studio Image/Video panel and plays on the
+// timeline. Used (opt-in) to embed road video into the MCAP alongside the sensor streams.
+// Source: https://github.com/foxglove/foxglove-sdk (foxglove.CompressedVideo)
+syntax = "proto3";
+
+package foxglove;
+
+import "google/protobuf/timestamp.proto";
+
+option java_package = "foxglove";
+option java_outer_classname = "CompressedVideoProto";
+option java_multiple_files = true;
+
+// A single frame of a compressed video bitstream.
+message CompressedVideo {
+  // Timestamp of the video frame.
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Frame of reference for the video.
+  string frame_id = 2;
+
+  // Compressed video frame data. For "h264"/"h265" this is Annex-B; key frames are prefixed
+  // with their parameter sets (SPS/PPS / VPS) so each is independently decodable.
+  bytes data = 3;
+
+  // Video format: "h264" | "h265" | "vp9" | "av1".
+  string format = 4;
+}

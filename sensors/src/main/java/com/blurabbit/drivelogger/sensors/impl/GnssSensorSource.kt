@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import com.blurabbit.drivelogger.core.clock.ClockSynchronizer
+import com.blurabbit.drivelogger.core.clock.GnssTimeHolder
 import com.blurabbit.drivelogger.core.common.Topics
 import com.blurabbit.drivelogger.proto.GnssRaw
 import com.blurabbit.drivelogger.proto.GpsExtras
@@ -38,6 +39,7 @@ import javax.inject.Inject
 class GnssSensorSource @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sync: ClockSynchronizer,
+    private val gnssTime: GnssTimeHolder,
 ) : SensorSource {
 
     override val id: String = "gnss"
@@ -93,6 +95,11 @@ class GnssSensorSource @Inject constructor(
         // elapsedRealtimeNanos() is already on the unified clock (API 17+, always true at minSdk 26).
         val unified = loc.elapsedRealtimeNanos
         fixTracker.onSample(unified)
+        // Publish GNSS UTC ↔ unified-clock offset so MCAP log_time can be GNSS-disciplined.
+        gnssTime.update(loc.time, unified)
+
+        // Fix-quality gate: trust the fix only with good accuracy and ≥4 satellites used.
+        val fixValid = loc.hasAccuracy() && loc.accuracy <= MAX_ACCURACY_M && lastSatUsed >= MIN_SATS_USED
 
         val fix = foxglove.LocationFix.newBuilder()
             .setTimestamp(Timestamp.newBuilder().setSeconds(loc.time / 1000).setNanos(((loc.time % 1000) * 1_000_000L).toInt()))
@@ -115,6 +122,7 @@ class GnssSensorSource @Inject constructor(
                     if (loc.hasBearingAccuracy()) bearingAccuracyDeg = loc.bearingAccuracyDegrees.toDouble()
                 }
             }
+            .setFixValid(fixValid)
             .build()
         producer.trySend(SensorRecord(Topics.GNSS_RAW, unified, extras))
     }
@@ -165,4 +173,9 @@ class GnssSensorSource @Inject constructor(
     fun satelliteCounts(): Pair<Int, Int> = lastSatTotal to lastSatUsed
 
     override fun health(): SensorHealthSnapshot = fixTracker.snapshot(id, driftMs = 0.0)
+
+    private companion object {
+        const val MAX_ACCURACY_M = 25f   // horizontal accuracy ceiling for a "valid" fix
+        const val MIN_SATS_USED = 4      // minimum satellites used in fix
+    }
 }

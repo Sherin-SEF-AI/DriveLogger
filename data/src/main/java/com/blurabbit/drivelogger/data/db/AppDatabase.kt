@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         DeviceHealthEntity::class,
         SensorHealthEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {

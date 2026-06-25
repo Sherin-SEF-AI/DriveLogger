@@ -19,6 +19,7 @@ interface TripRepository {
     suspend fun allTripsOnce(): List<Trip>
     suspend fun createTrip(profile: TripProfile, startElapsedNs: Long, startWallMs: Long): Trip
     suspend fun updateStatus(id: String, status: TripStatus, endWallMs: Long? = null)
+    suspend fun setVerified(id: String, verified: Boolean)
     suspend fun updateStats(id: String, stats: TripStats)
     suspend fun delete(id: String)
     suspend fun addSession(session: RecordingSession): Long

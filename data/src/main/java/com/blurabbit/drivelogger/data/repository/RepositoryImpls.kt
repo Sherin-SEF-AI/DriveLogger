@@ -50,6 +50,8 @@ class TripRepositoryImpl @Inject constructor(
     override suspend fun updateStatus(id: String, status: TripStatus, endWallMs: Long?) =
         dao.updateStatus(id, status.name, endWallMs)
 
+    override suspend fun setVerified(id: String, verified: Boolean) = dao.setVerified(id, verified)
+
     override suspend fun updateStats(id: String, stats: TripStats) = dao.updateStats(
         id, stats.distanceMeters, stats.maxSpeedMps, stats.avgSpeedMps,
         stats.gpsSamples, stats.imuSamples, stats.frameCount, stats.eventCount,

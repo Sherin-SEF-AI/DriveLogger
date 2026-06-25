@@ -83,6 +83,8 @@ message GpsExtras {
   double vertical_accuracy_m = 5;
   double speed_accuracy_mps = 6;
   double bearing_accuracy_deg = 7;
+  // Fix-quality gate: false when accuracy/satellite count is too poor to trust for datasets.
+  bool fix_valid = 8;
 }
 
 // Device health / telemetry snapshot.

@@ -39,6 +39,9 @@ interface TripDao {
         gps: Long, imu: Long, frames: Long, events: Long,
     )
 
+    @Query("UPDATE trips SET verified = :verified WHERE id = :id")
+    suspend fun setVerified(id: String, verified: Boolean)
+
     @Query("DELETE FROM trips WHERE id = :id")
     suspend fun delete(id: String)
 

@@ -28,6 +28,7 @@ internal fun TripEntity.toDomain() = Trip(
     endWallMs = endWallMs,
     startElapsedNs = startElapsedNs,
     stats = TripStats(distanceMeters, maxSpeedMps, avgSpeedMps, gpsSamples, imuSamples, frameCount, eventCount),
+    verified = verified,
 )
 
 internal fun EventEntity.toDomain() = DrivingEvent(

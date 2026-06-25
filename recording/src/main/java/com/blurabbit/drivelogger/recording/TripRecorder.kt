@@ -7,6 +7,7 @@ import com.blurabbit.drivelogger.core.clock.DriftMonitor
 import com.blurabbit.drivelogger.core.clock.MonotonicClock
 import com.blurabbit.drivelogger.core.common.Topics
 import com.blurabbit.drivelogger.core.mcap.McapAsyncWriter
+import com.blurabbit.drivelogger.core.mcap.McapRecoveryTool
 import com.blurabbit.drivelogger.core.mcap.McapWriterConfig
 import com.blurabbit.drivelogger.core.mcap.TopicSchema
 import com.blurabbit.drivelogger.domain.model.DrivingEvent
@@ -114,6 +115,7 @@ class TripRecorder @Inject constructor(
 
     private var tripId: String? = null
     private var startElapsedNs = 0L
+    @Volatile private var firstFixAnchored = false
 
     /** The foreground service (a LifecycleOwner) calls this so the camera can bind. */
     fun attachLifecycle(owner: LifecycleOwner?) { lifecycleOwner = owner }
@@ -219,6 +221,11 @@ class TripRecorder @Inject constructor(
                 }
             }
             Topics.GNSS_RAW -> (record.message as? GpsExtras)?.let { ex ->
+                // Re-anchor MCAP epoch to GNSS UTC the first time we get a trustworthy fix.
+                if (ex.fixValid && !firstFixAnchored) {
+                    clock.captureEpochAnchor()
+                    firstFixAnchored = true
+                }
                 currentSpeedMps = ex.speedMps
                 if (ex.speedMps > maxSpeedMps) maxSpeedMps = ex.speedMps
                 detector.onSpeed(SpeedSample(record.unifiedTsNs, ex.speedMps, lastLat ?: 0.0, lastLon ?: 0.0))
@@ -239,7 +246,14 @@ class TripRecorder @Inject constructor(
         try {
             val id = tripId ?: return
             val closingIndex = segmentIndex
-            // Build the new segment writer first, then swap, then close the old one (no write gap).
+            val closingStartNs = segmentStartNs
+            // Finalize the closing segment's MP4 first (camera stays bound for the next segment).
+            val closedMp4 = if (cameraOn) camera.stopSegmentMp4() else null
+            // Opt-in: embed the just-finished video into the still-open closing MCAP.
+            if (config.embedVideo && closedMp4 != null) {
+                writer?.let { VideoMcapMuxer.muxInto(it, closedMp4, clock.toEpochNanos(closingStartNs)) }
+            }
+            // Swap to a fresh writer for the new segment, then close the old one (no write gap).
             segmentIndex += 1
             segmentStartNs = now
             val newMcap = storage.segMcap(id, segmentIndex)
@@ -255,11 +269,10 @@ class TripRecorder @Inject constructor(
             )
             old?.close()
             tripRepo.closeSession(
-                /* old sessionId is now overwritten; close the prior segment via its index */
                 sessionForIndex(id, closingIndex), now,
                 if (cameraOn) storage.segMp4(id, closingIndex).absolutePath else null,
             )
-            if (cameraOn) camera.rotate(storage.segMp4(id, segmentIndex))
+            if (cameraOn) camera.startSegmentMp4(storage.segMp4(id, segmentIndex))
             enqueueSegmentUpload(id, closingIndex)
         } finally {
             rotateMutex.unlock()
@@ -304,9 +317,16 @@ class TripRecorder @Inject constructor(
     override suspend fun stop() = lifecycle.withLock {
         val id = tripId ?: return@withLock
         _state.value = _state.value.copy(phase = RecordingPhase.STOPPING)
-        camera.stop()
+        // Quiesce the pipeline first so no rotation runs while we finalize the last segment.
         scope?.let { sc -> sc.coroutineContext[Job]?.children?.forEach { runCatching { it.cancelAndJoin() } } }
         sensorSources.forEach { it.stop() }
+
+        // Finalize the last segment's MP4, optionally embed it, then release the camera.
+        val lastMp4 = if (cameraOn) camera.stopSegmentMp4() else null
+        if (config.embedVideo && lastMp4 != null) {
+            writer?.let { VideoMcapMuxer.muxInto(it, lastMp4, clock.toEpochNanos(segmentStartNs)) }
+        }
+        camera.stop()
 
         val durationNs = clock.nowNanos() - startElapsedNs
         val avgSpeed = if (durationNs > 0) distanceMeters / (durationNs / 1e9) else 0.0
@@ -330,13 +350,19 @@ class TripRecorder @Inject constructor(
         writer = null
         tripRepo.closeSession(sessionId, clock.nowNanos(), if (cameraOn) storage.segMp4(id, segmentIndex).absolutePath else null)
 
-        // metadata.json sidecar over all segments (file sizes + end time now final).
+        // On-device integrity: structurally validate every MCAP segment before trusting/uploading.
+        val segments = storage.mcapSegments(id)
+        val verified = segments.isNotEmpty() && segments.all { McapRecoveryTool.validate(it).ok }
+        tripRepo.setVerified(id, verified)
+
+        // metadata.json sidecar over all segments (sizes + per-artifact sha256 + end time now final).
         tripRepo.getTrip(id)?.let { trip ->
             metadataGen.write(
                 trip.copy(stats = stats), durationNs,
-                storage.mcapSegments(id),
+                segments,
                 storage.segMp4Files(id),
                 storage.metadataFile(id),
+                integrityVerified = verified,
             )
         }
 
@@ -472,6 +498,10 @@ class TripRecorder @Inject constructor(
         // Always include camera + events channels even before their first message.
         map[Topics.CAMERA_FRONT] = TopicSchema(Topics.CAMERA_FRONT, CameraFrameMeta.getDescriptor())
         map[Topics.EVENTS] = TopicSchema(Topics.EVENTS, com.blurabbit.drivelogger.proto.DrivingEvent.getDescriptor())
+        if (config.embedVideo) {
+            map[Topics.CAMERA_FRONT_VIDEO] =
+                TopicSchema(Topics.CAMERA_FRONT_VIDEO, foxglove.CompressedVideo.getDescriptor())
+        }
         return map.values.toList()
     }
 
@@ -500,7 +530,7 @@ class TripRecorder @Inject constructor(
     private fun resetCounters() {
         imuSamples = 0; gpsSamples = 0; frameCount.set(0); eventCount = 0; droppedWrites.set(0)
         distanceMeters = 0.0; maxSpeedMps = 0.0; currentSpeedMps = 0.0
-        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0
+        lastLat = null; lastLon = null; lastTelemetryWriteNs = 0; firstFixAnchored = false
     }
 }
 

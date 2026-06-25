@@ -17,6 +17,45 @@ object McapRecoveryTool {
 
     data class Result(val messageCount: Long, val chunkCount: Int, val recoveredBytes: Long)
 
+    data class ValidationResult(val ok: Boolean, val messageCount: Long, val chunkCount: Int, val error: String?)
+
+    /**
+     * Structural self-check used before upload: leading + trailing magic present, every record frames
+     * cleanly start→end (no truncation/overrun), and a Footer is present. Does not decompress chunks.
+     */
+    fun validate(file: java.io.File): ValidationResult {
+        RandomAccessFile(file, "r").use { raf ->
+            val len = raf.length()
+            if (len < 2L * MCAP_MAGIC.size) return ValidationResult(false, 0, 0, "file too small")
+            val head = ByteArray(MCAP_MAGIC.size).also { raf.seek(0); raf.readFully(it) }
+            if (!head.contentEquals(MCAP_MAGIC)) return ValidationResult(false, 0, 0, "bad leading magic")
+            val tail = ByteArray(MCAP_MAGIC.size).also { raf.seek(len - MCAP_MAGIC.size); raf.readFully(it) }
+            if (!tail.contentEquals(MCAP_MAGIC)) return ValidationResult(false, 0, 0, "bad trailing magic (truncated?)")
+
+            var pos = MCAP_MAGIC.size.toLong()
+            var messages = 0L
+            var chunks = 0
+            var sawFooter = false
+            val recordsEnd = len - MCAP_MAGIC.size // records occupy bytes between the two magics
+            while (pos + 9 <= recordsEnd) {
+                raf.seek(pos)
+                val op = raf.read()
+                val recLen = readU64(raf)
+                if (recLen < 0 || pos + 9 + recLen > recordsEnd) {
+                    return ValidationResult(false, messages, chunks, "record overrun at offset $pos")
+                }
+                when (op) {
+                    Op.CHUNK -> chunks++
+                    Op.MESSAGE -> messages++
+                    Op.FOOTER -> sawFooter = true
+                }
+                pos += 9 + recLen
+            }
+            if (!sawFooter) return ValidationResult(false, messages, chunks, "no footer record")
+            return ValidationResult(true, messages, chunks, null)
+        }
+    }
+
     private class ChunkInfo(
         val startOffset: Long, val length: Long,
         val msgStart: Long, val msgEnd: Long,

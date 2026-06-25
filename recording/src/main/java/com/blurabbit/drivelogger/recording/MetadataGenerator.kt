@@ -1,5 +1,6 @@
 package com.blurabbit.drivelogger.recording
 
+import com.blurabbit.drivelogger.core.common.Hashing
 import com.blurabbit.drivelogger.domain.model.Trip
 import org.json.JSONArray
 import org.json.JSONObject
@@ -12,11 +13,22 @@ import javax.inject.Inject
  */
 class MetadataGenerator @Inject constructor() {
 
-    fun write(trip: Trip, durationNs: Long, mcapSegments: List<File>, mp4Segments: List<File>, dest: File): String {
+    fun write(
+        trip: Trip,
+        durationNs: Long,
+        mcapSegments: List<File>,
+        mp4Segments: List<File>,
+        dest: File,
+        integrityVerified: Boolean,
+    ): String {
         val durationSec = durationNs / 1e9
         val stats = trip.stats
+        // SHA-256 each artifact so downstream ingestion can verify nothing was corrupted/truncated.
+        fun artifactJson(f: File) = JSONObject()
+            .put("name", f.name).put("bytes", f.length()).put("sha256", Hashing.sha256(f))
         val json = JSONObject().apply {
-            put("schema_version", 1)
+            put("schema_version", 2)
+            put("integrity_verified", integrityVerified)
             put("trip_id", trip.id)
             put("vehicle_id", trip.profile.vehicleId ?: JSONObject.NULL)
             put("vehicle_name", trip.profile.vehicleName ?: JSONObject.NULL)
@@ -37,12 +49,8 @@ class MetadataGenerator @Inject constructor() {
             put("event_count", stats.eventCount)
             put("segment_count", mcapSegments.size)
             put("artifacts", JSONObject().apply {
-                put("mcap", JSONArray().apply {
-                    mcapSegments.forEach { put(JSONObject().put("name", it.name).put("bytes", it.length())) }
-                })
-                put("mp4", JSONArray().apply {
-                    mp4Segments.forEach { put(JSONObject().put("name", it.name).put("bytes", it.length())) }
-                })
+                put("mcap", JSONArray().apply { mcapSegments.forEach { put(artifactJson(it)) } })
+                put("mp4", JSONArray().apply { mp4Segments.forEach { put(artifactJson(it)) } })
                 put("mcap_total_bytes", mcapSegments.sumOf { it.length() })
                 put("mp4_total_bytes", mp4Segments.sumOf { it.length() })
             })
