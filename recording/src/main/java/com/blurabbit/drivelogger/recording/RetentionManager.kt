@@ -1,6 +1,7 @@
 package com.blurabbit.drivelogger.recording
 
 import com.blurabbit.drivelogger.domain.model.TripStatus
+import com.blurabbit.drivelogger.domain.repository.SettingsRepository
 import com.blurabbit.drivelogger.domain.repository.TripRepository
 import com.blurabbit.drivelogger.domain.repository.UploadRepository
 import kotlinx.coroutines.Dispatchers
@@ -21,15 +22,16 @@ class RetentionManager @Inject constructor(
     private val storage: TripStorage,
     private val tripRepo: TripRepository,
     private val uploadRepo: UploadRepository,
-    private val config: RecordingConfig,
+    private val settingsRepo: SettingsRepository,
 ) {
     suspend fun sweep(): Int = withContext(Dispatchers.IO) {
         var deleted = 0
+        val keepLastN = settingsRepo.get().keepLastNTrips
         val finished = tripRepo.allTripsOnce().filter {
             it.status == TripStatus.STOPPED || it.status == TripStatus.EXPORTED
         }
         // Keep the most-recent N locally regardless of upload state.
-        finished.drop(config.keepLastNTrips).forEach { trip ->
+        finished.drop(keepLastN).forEach { trip ->
             val total = uploadRepo.countForTrip(trip.id)
             val incomplete = uploadRepo.incompleteForTrip(trip.id)
             // Only delete if it was enqueued for upload and everything finished.
