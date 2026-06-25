@@ -58,8 +58,12 @@ class UploadWorker @AssistedInject constructor(
                 progress = { sent, total -> /* progress persisted on part boundaries below */ },
             )
             when (result) {
-                is UploadResult.Success ->
+                is UploadResult.Success -> {
+                    // Confirm the object exists remotely with the right size, then free local space.
+                    val verified = provider.verify(config, task.remoteKey, file.length())
                     uploadRepo.update(task.copy(status = UploadStatus.COMPLETED, bytesSent = file.length(), checksumSha256 = sha))
+                    if (verified) file.delete()
+                }
                 is UploadResult.Retryable -> {
                     anyRetryable = true
                     uploadRepo.update(task.copy(

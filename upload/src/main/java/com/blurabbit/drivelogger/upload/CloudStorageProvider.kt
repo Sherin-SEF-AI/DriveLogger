@@ -43,4 +43,7 @@ interface CloudStorageProvider {
         completedParts: List<PartRef>,
         progress: UploadProgress,
     ): UploadResult
+
+    /** Confirm the object exists remotely with the expected size (HTTP HEAD). Gates local deletion. */
+    suspend fun verify(config: CloudConfig, remoteKey: String, expectedBytes: Long): Boolean
 }

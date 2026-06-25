@@ -66,6 +66,19 @@ class S3Provider @Inject constructor(
         }
     }
 
+    override suspend fun verify(config: CloudConfig, remoteKey: String, expectedBytes: Long): Boolean {
+        val signer = AwsV4Signer(config.accessKey, config.secretKey, config.region)
+        val req = signer.sign(
+            Request.Builder().url(objectUrl(config, remoteKey)).head().build(),
+            System.currentTimeMillis(),
+        )
+        return runCatching {
+            client.newCall(req).execute().use { resp ->
+                resp.isSuccessful && (resp.header("Content-Length")?.toLongOrNull() == expectedBytes)
+            }
+        }.getOrDefault(false)
+    }
+
     private fun objectUrl(config: CloudConfig, key: String, query: String = ""): String {
         val base = config.endpoint.trimEnd('/')
         val keyPath = key.trimStart('/')
@@ -155,4 +168,6 @@ class AzureBlobProvider @Inject constructor() : CloudStorageProvider {
         config: CloudConfig, file: File, remoteKey: String, sha256Hex: String,
         existingUploadId: String?, completedParts: List<PartRef>, progress: UploadProgress,
     ): UploadResult = UploadResult.Fatal("Azure Blob provider not yet implemented")
+
+    override suspend fun verify(config: CloudConfig, remoteKey: String, expectedBytes: Long): Boolean = false
 }

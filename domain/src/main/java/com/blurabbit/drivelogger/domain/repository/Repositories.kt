@@ -16,6 +16,7 @@ interface TripRepository {
     fun observeTrip(id: String): Flow<Trip?>
     suspend fun getTrip(id: String): Trip?
     suspend fun inProgressTrips(): List<Trip>
+    suspend fun allTripsOnce(): List<Trip>
     suspend fun createTrip(profile: TripProfile, startElapsedNs: Long, startWallMs: Long): Trip
     suspend fun updateStatus(id: String, status: TripStatus, endWallMs: Long? = null)
     suspend fun updateStats(id: String, stats: TripStats)
@@ -37,6 +38,8 @@ interface UploadRepository {
     suspend fun update(task: UploadTask)
     suspend fun pending(): List<UploadTask>
     suspend fun byId(id: Long): UploadTask?
+    suspend fun countForTrip(tripId: String): Int
+    suspend fun incompleteForTrip(tripId: String): Int
 }
 
 interface HealthRepository {
