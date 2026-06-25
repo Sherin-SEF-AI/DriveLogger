@@ -34,4 +34,5 @@ data class Trip(
     val endWallMs: Long?,
     val startElapsedNs: Long?,
     val stats: TripStats,
+    val verified: Boolean = false,
 )

@@ -13,7 +13,7 @@ class ClockSynchronizerTest {
     @Test
     fun `identity source maps timestamps unchanged`() {
         val time = FakeTime(1_000_000_000)
-        val sync = ClockSynchronizer(MonotonicClock(time))
+        val sync = ClockSynchronizer(MonotonicClock(time, GnssTimeHolder()))
         sync.registerIdentitySource("gnss")
 
         assertThat(sync.convert("gnss", 42L)).isEqualTo(42L)
@@ -22,7 +22,7 @@ class ClockSynchronizerTest {
     @Test
     fun `offset converges toward latency-free minimum`() {
         val time = FakeTime(0)
-        val sync = ClockSynchronizer(MonotonicClock(time))
+        val sync = ClockSynchronizer(MonotonicClock(time, GnssTimeHolder()))
 
         // Source clock starts 1_000ns behind unified; each delivery adds jittery latency.
         val sourceEpochSkew = 1_000L

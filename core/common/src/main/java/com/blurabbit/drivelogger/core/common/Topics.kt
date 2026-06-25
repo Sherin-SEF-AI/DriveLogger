@@ -7,6 +7,7 @@ package com.blurabbit.drivelogger.core.common
  */
 object Topics {
     const val CAMERA_FRONT = "/camera/front"
+    const val CAMERA_FRONT_VIDEO = "/camera/front/video"
     const val CAMERA_REAR = "/camera/rear"
     const val GPS_FIX = "/gps/fix"
     const val GNSS_RAW = "/gps/raw"

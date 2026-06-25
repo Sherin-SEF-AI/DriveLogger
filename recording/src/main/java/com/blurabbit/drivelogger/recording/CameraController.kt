@@ -48,6 +48,7 @@ class CameraController @Inject constructor(
     private var owner: LifecycleOwner? = null
     private var onFrameMeta: ((CameraFrameMeta) -> Unit)? = null
     private val frameId = AtomicLong(0)
+    @Volatile private var currentMp4: File? = null
     @Volatile private var videoUri: String = ""
     @Volatile private var currentQuality: Quality = Quality.FHD
     @Volatile private var targetQuality: Quality = Quality.FHD
@@ -66,21 +67,28 @@ class CameraController @Inject constructor(
     }
 
     /** Close the current MP4 and start a new one (segment boundary); re-binds if quality changed. */
-    @SuppressLint("RestrictedApi")
     suspend fun rotate(newFile: File): Boolean {
-        val cameraProvider = provider ?: return false
-        if (targetQuality != currentQuality) {
+        stopSegmentMp4()
+        return startSegmentMp4(newFile)
+    }
+
+    /** Stop + finalize the current segment's MP4 (camera stays bound). Returns the finalized file. */
+    suspend fun stopSegmentMp4(): File? {
+        val file = currentMp4
+        suspendOnMain { runCatching { recording?.stop() }; recording = null; true }
+        return file
+    }
+
+    /** Start recording a new segment MP4; re-binds the camera if the target quality changed. */
+    @SuppressLint("RestrictedApi")
+    suspend fun startSegmentMp4(newFile: File): Boolean {
+        val rec = recorder
+        if (targetQuality != currentQuality || rec == null) {
             currentQuality = targetQuality
-            return suspendOnMain {
-                runCatching { recording?.stop() }.also { recording = null }
-                runCatching { cameraProvider.unbindAll() }
-                bindOnMainAndRecord(newFile)
-            }
+            return suspendOnMain { runCatching { provider?.unbindAll() }; bindOnMainAndRecord(newFile) }
         }
-        // Same quality: reuse the bound VideoCapture, just swap the output file.
-        val rec = recorder ?: return false
         return suspendOnMain {
-            runCatching { recording?.stop() }
+            currentMp4 = newFile
             videoUri = newFile.name
             recording = rec.prepareRecording(context, FileOutputOptions.Builder(newFile).build())
                 .start(ContextCompat.getMainExecutor(context)) { }
@@ -136,6 +144,7 @@ class CameraController @Inject constructor(
         )
         cameraProvider.unbindAll()
         cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, videoBuilder.build())
+        currentMp4 = output
         videoUri = output.name
         recording = rec.prepareRecording(context, FileOutputOptions.Builder(output).build())
             .start(ContextCompat.getMainExecutor(context)) { }

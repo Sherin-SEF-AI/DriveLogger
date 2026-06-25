@@ -30,6 +30,7 @@ data class TripEntity(
     val imuSamples: Long = 0,
     val frameCount: Long = 0,
     val eventCount: Long = 0,
+    val verified: Boolean = false,
 )
 
 @Entity(
