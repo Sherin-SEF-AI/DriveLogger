@@ -12,8 +12,10 @@ import com.blurabbit.drivelogger.data.repository.EventRepositoryImpl
 import com.blurabbit.drivelogger.data.repository.HealthRepositoryImpl
 import com.blurabbit.drivelogger.data.repository.TripRepositoryImpl
 import com.blurabbit.drivelogger.data.repository.UploadRepositoryImpl
+import com.blurabbit.drivelogger.data.settings.SettingsRepositoryImpl
 import com.blurabbit.drivelogger.domain.repository.EventRepository
 import com.blurabbit.drivelogger.domain.repository.HealthRepository
+import com.blurabbit.drivelogger.domain.repository.SettingsRepository
 import com.blurabbit.drivelogger.domain.repository.TripRepository
 import com.blurabbit.drivelogger.domain.repository.UploadRepository
 import dagger.Binds
@@ -64,4 +66,5 @@ abstract class RepositoryModule {
     @Binds @Singleton abstract fun bindEventRepository(impl: EventRepositoryImpl): EventRepository
     @Binds @Singleton abstract fun bindUploadRepository(impl: UploadRepositoryImpl): UploadRepository
     @Binds @Singleton abstract fun bindHealthRepository(impl: HealthRepositoryImpl): HealthRepository
+    @Binds @Singleton abstract fun bindSettingsRepository(impl: SettingsRepositoryImpl): SettingsRepository
 }

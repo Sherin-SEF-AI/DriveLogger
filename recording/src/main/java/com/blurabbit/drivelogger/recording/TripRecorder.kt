@@ -18,8 +18,11 @@ import com.blurabbit.drivelogger.domain.model.TripStatus
 import com.blurabbit.drivelogger.domain.model.ArtifactKind
 import com.blurabbit.drivelogger.domain.model.UploadStatus
 import com.blurabbit.drivelogger.domain.model.UploadTask
+import com.blurabbit.drivelogger.domain.model.AppSettings
+import com.blurabbit.drivelogger.domain.model.VideoQuality
 import com.blurabbit.drivelogger.domain.repository.EventRepository
 import com.blurabbit.drivelogger.domain.repository.HealthRepository
+import com.blurabbit.drivelogger.domain.repository.SettingsRepository
 import com.blurabbit.drivelogger.domain.repository.TripRepository
 import com.blurabbit.drivelogger.domain.repository.UploadRepository
 import com.blurabbit.drivelogger.domain.repository.UploadTrigger
@@ -69,8 +72,7 @@ class TripRecorder @Inject constructor(
     private val sync: ClockSynchronizer,
     private val drift: DriftMonitor,
     private val clock: MonotonicClock,
-    private val mcapConfig: McapWriterConfig,
-    private val config: RecordingConfig,
+    private val settingsRepo: SettingsRepository,
     private val detector: EventDetector,
     private val storage: TripStorage,
     private val camera: CameraController,
@@ -82,6 +84,11 @@ class TripRecorder @Inject constructor(
     private val retention: RetentionManager,
     private val metadataGen: MetadataGenerator,
 ) : RecordingController {
+
+    // Loaded from settings at the start of each trip and held constant for its duration.
+    @Volatile private var activeConfig: RecordingConfig = RecordingConfig()
+    @Volatile private var activeMcapConfig: McapWriterConfig = McapWriterConfig()
+    @Volatile private var anonymizePii: Boolean = false
 
     private val _state = MutableStateFlow(RecordingState())
     override val state: StateFlow<RecordingState> = _state.asStateFlow()
@@ -123,6 +130,21 @@ class TripRecorder @Inject constructor(
     override suspend fun start(tripId: String) = lifecycle.withLock {
         if (_state.value.phase != RecordingPhase.IDLE) return@withLock
         val trip = tripRepo.getTrip(tripId) ?: return@withLock
+
+        // Apply the user's recording profile + privacy settings for this trip.
+        val settings = settingsRepo.get()
+        if (!settings.consentGiven) {
+            _state.value = RecordingState(phase = RecordingPhase.IDLE, warnings = listOf("Recording consent not granted — enable it in Settings"))
+            return@withLock
+        }
+        activeConfig = settings.toRecordingConfig()
+        activeMcapConfig = McapWriterConfig(
+            compression = if (settings.compressionEnabled) McapWriterConfig.Compression.LZ4
+            else McapWriterConfig.Compression.NONE,
+        )
+        anonymizePii = settings.anonymizePii
+        camera.requestQuality(settings.videoQuality.toCameraQuality())
+
         this.tripId = tripId
         startElapsedNs = clock.nowNanos()
         clock.captureEpochAnchor() // anchor monotonic→epoch so MCAP log_time is real wall time
@@ -134,7 +156,7 @@ class TripRecorder @Inject constructor(
         val available = sensorSources.filter { it.isAvailable() }
         currentSchemas = buildSchemas(available)
         val mcap = storage.segMcap(tripId, segmentIndex)
-        val w = McapAsyncWriter(mcap, mcapConfig, currentSchemas)
+        val w = McapAsyncWriter(mcap, activeMcapConfig, currentSchemas)
         writer = w
         writeCalibration(w)
 
@@ -239,8 +261,8 @@ class TripRecorder @Inject constructor(
     private suspend fun maybeRotate() {
         val w = writer ?: return
         val now = clock.nowNanos()
-        val bySize = w.approxBytes() >= config.segmentBytes
-        val byTime = now - segmentStartNs >= config.segmentSeconds * 1_000_000_000L
+        val bySize = w.approxBytes() >= activeConfig.segmentBytes
+        val byTime = now - segmentStartNs >= activeConfig.segmentSeconds * 1_000_000_000L
         if (!bySize && !byTime) return
         if (!rotateMutex.tryLock()) return
         try {
@@ -250,14 +272,14 @@ class TripRecorder @Inject constructor(
             // Finalize the closing segment's MP4 first (camera stays bound for the next segment).
             val closedMp4 = if (cameraOn) camera.stopSegmentMp4() else null
             // Opt-in: embed the just-finished video into the still-open closing MCAP.
-            if (config.embedVideo && closedMp4 != null) {
+            if (activeConfig.embedVideo && closedMp4 != null) {
                 writer?.let { VideoMcapMuxer.muxInto(it, closedMp4, clock.toEpochNanos(closingStartNs)) }
             }
             // Swap to a fresh writer for the new segment, then close the old one (no write gap).
             segmentIndex += 1
             segmentStartNs = now
             val newMcap = storage.segMcap(id, segmentIndex)
-            val nw = McapAsyncWriter(newMcap, mcapConfig, currentSchemas)
+            val nw = McapAsyncWriter(newMcap, activeMcapConfig, currentSchemas)
             writeCalibration(nw)
             val old = writer
             writer = nw
@@ -323,7 +345,7 @@ class TripRecorder @Inject constructor(
 
         // Finalize the last segment's MP4, optionally embed it, then release the camera.
         val lastMp4 = if (cameraOn) camera.stopSegmentMp4() else null
-        if (config.embedVideo && lastMp4 != null) {
+        if (activeConfig.embedVideo && lastMp4 != null) {
             writer?.let { VideoMcapMuxer.muxInto(it, lastMp4, clock.toEpochNanos(segmentStartNs)) }
         }
         camera.stop()
@@ -357,8 +379,12 @@ class TripRecorder @Inject constructor(
 
         // metadata.json sidecar over all segments (sizes + per-artifact sha256 + end time now final).
         tripRepo.getTrip(id)?.let { trip ->
+            // Privacy: strip personally-identifying fields from the dataset manifest when enabled.
+            val profile = if (anonymizePii) trip.profile.copy(
+                driverName = null, vehicleId = null, vehicleName = null, notes = null,
+            ) else trip.profile
             metadataGen.write(
-                trip.copy(stats = stats), durationNs,
+                trip.copy(stats = stats, profile = profile), durationNs,
                 segments,
                 storage.segMp4Files(id),
                 storage.metadataFile(id),
@@ -381,7 +407,7 @@ class TripRecorder @Inject constructor(
     // ---- auto-upload ---------------------------------------------------------------------
 
     private suspend fun enqueueSegmentUpload(tripId: String, index: Int) {
-        if (!config.autoUpload) return
+        if (!activeConfig.autoUpload) return
         val provider = uploadTrigger.defaultProvider() ?: return
         val prefix = remotePrefix(tripId)
         val artifacts = buildList {
@@ -401,7 +427,7 @@ class TripRecorder @Inject constructor(
     }
 
     private suspend fun enqueueTripUpload(tripId: String) {
-        val provider = if (config.autoUpload) uploadTrigger.defaultProvider() else null
+        val provider = if (activeConfig.autoUpload) uploadTrigger.defaultProvider() else null
         if (provider == null) return
         val prefix = remotePrefix(tripId)
         val files = storage.mcapSegments(tripId).map { it to ArtifactKind.MCAP } +
@@ -444,7 +470,7 @@ class TripRecorder @Inject constructor(
                 sensorHealth = available.map { it.health() },
             )
             // Storage watchdog: stop gracefully before the disk fills (the 14 GB problem).
-            if (free < config.freeSpaceFloorBytes) {
+            if (free < activeConfig.freeSpaceFloorBytes) {
                 pushWarning("low storage (${free / (1024 * 1024)} MB) — stopping")
                 triggerGracefulStop(); return
             }
@@ -477,7 +503,7 @@ class TripRecorder @Inject constructor(
 
         // Active mitigation: thermal step-down (applied at next segment rotation) + low-battery stop.
         camera.requestQuality(qualityForThermal(t.thermalStatus))
-        if (!t.charging && t.batteryPct in 0.0..config.minBatteryPct) {
+        if (!t.charging && t.batteryPct in 0.0..activeConfig.minBatteryPct) {
             pushWarning("battery ${t.batteryPct.toInt()}% — stopping")
             triggerGracefulStop()
         }
@@ -498,7 +524,7 @@ class TripRecorder @Inject constructor(
         // Always include camera + events channels even before their first message.
         map[Topics.CAMERA_FRONT] = TopicSchema(Topics.CAMERA_FRONT, CameraFrameMeta.getDescriptor())
         map[Topics.EVENTS] = TopicSchema(Topics.EVENTS, com.blurabbit.drivelogger.proto.DrivingEvent.getDescriptor())
-        if (config.embedVideo) {
+        if (activeConfig.embedVideo) {
             map[Topics.CAMERA_FRONT_VIDEO] =
                 TopicSchema(Topics.CAMERA_FRONT_VIDEO, foxglove.CompressedVideo.getDescriptor())
         }
@@ -536,6 +562,22 @@ class TripRecorder @Inject constructor(
 
 /** SQLite stores NaN/Infinity as NULL, breaking NOT NULL columns — coerce to a safe sentinel. */
 private fun Double.nanGuard(sentinel: Double = -1.0): Double = if (isFinite()) this else sentinel
+
+private fun AppSettings.toRecordingConfig(): RecordingConfig = RecordingConfig(
+    segmentSeconds = segmentSeconds,
+    segmentBytes = segmentMb.toLong() * 1024 * 1024,
+    freeSpaceFloorBytes = freeSpaceFloorMb.toLong() * 1024 * 1024,
+    keepLastNTrips = keepLastNTrips,
+    autoUpload = autoUpload,
+    embedVideo = embedVideo,
+)
+
+private fun VideoQuality.toCameraQuality(): Quality = when (this) {
+    VideoQuality.UHD -> Quality.UHD
+    VideoQuality.FHD -> Quality.FHD
+    VideoQuality.HD -> Quality.HD
+    VideoQuality.SD -> Quality.SD
+}
 
 private fun com.blurabbit.drivelogger.proto.DrivingEvent.EventType.toDomain(): DrivingEventType = when (this) {
     com.blurabbit.drivelogger.proto.DrivingEvent.EventType.HARD_BRAKING -> DrivingEventType.HARD_BRAKING
